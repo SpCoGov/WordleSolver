@@ -1,5 +1,7 @@
 plugins {
     id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
 group = 'top.spco.wordlesolver'
@@ -13,8 +15,28 @@ dependencies {
     implementation 'me.tongfei:progressbar:0.10.0'
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    implementation "org.openjfx:javafx-controls:21.0.4"
+}
+
+javafx {
+    version = '21.0.4'
+    modules = [ 'javafx.controls' ]
+}
+
+application {
+    mainClass = 'top.spco.wordlesolver.WordleSimViewerApp'
 }
 
 test {
     useJUnitPlatform()
+}
+tasks.withType(JavaExec).configureEach {
+    def javafxLibs = configurations.runtimeClasspath
+            .findAll { it.name.contains('javafx') }
+            .collect { it.absolutePath }
+
+    jvmArgs = [
+            '--module-path', javafxLibs.join(File.pathSeparator),
+            '--add-modules', 'javafx.controls'
+    ]
 }

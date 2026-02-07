@@ -4,9 +4,12 @@ import java.io.File;
 
 public class Main {
     public static void main(String[] args) {
-        WordleSolver solver = new WordleSolver();
-        solver.setWordList(new File("E:\\MyCodes\\WordleSolver\\src\\main\\resources\\answers"));
-                ;
+        WordleRegex solver = new WordleRegex();
+        solver.setWordList(new File("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers"));
+        solver.guess("gSTbARE")
+                .guess("gSTObNY")
+                .guess("gSTObMP")
+        ;
         System.out.println(solver.printAnswers(true).getFirst());
     }
 }

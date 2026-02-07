@@ -3,12 +3,11 @@ package top.spco.wordlesolver;
 import me.tongfei.progressbar.ProgressBar;
 import me.tongfei.progressbar.ProgressBarBuilder;
 import me.tongfei.progressbar.ProgressBarStyle;
-import top.spco.wordlesolver.WordleSolver.LetterColor;
+import top.spco.wordlesolver.WordleRegex.LetterColor;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
 
 public class Wordle {
@@ -136,6 +135,10 @@ public class Wordle {
         }
     }
 
+    public static Wordle start(int maxAttempts, String answer) {
+        return new Wordle(answer, maxAttempts);
+    }
+
     public static void main(String[] args) {
         int testTimes = 10000;
         int testedTimes = 0;
@@ -149,9 +152,10 @@ public class Wordle {
 
         long startTime = System.currentTimeMillis();
         for (int i = 0; i < testTimes; i++) {
-            Wordle wordle = start(6, 5, new File("E:\\MyCodes\\WordleSolver\\src\\main\\resources\\answers"));
-            WordleSolver solver = new WordleSolver();
-            solver.setWordList(new File("E:\\MyCodes\\WordleSolver\\src\\main\\resources\\answers"));
+            File answers = new File("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers");
+            Wordle wordle = start(6, 5, answers);
+            WordleRegex solver = new WordleRegex();
+            solver.setWordList(answers);
             LinkedHashMap<String,String> attemptResultMap = new LinkedHashMap<>();
             try {
                 do {
