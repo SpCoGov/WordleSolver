@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class WordleSolver {
-    private final WordleRegex regex = new WordleRegex();
+    private final WordleConstraint regex = new WordleConstraint();
     private final Map<String, String> guessResult = new HashMap<>();
     private int guessTime = 0;
     private int maxGuessTime = 6;

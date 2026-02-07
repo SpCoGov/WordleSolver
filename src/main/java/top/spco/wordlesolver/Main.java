@@ -4,7 +4,7 @@ import java.io.File;
 
 public class Main {
     public static void main(String[] args) {
-        WordleRegex solver = new WordleRegex();
+        WordleConstraint solver = new WordleConstraint();
         solver.setWordList(new File("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers"));
         solver.guess("gSTbARE")
                 .guess("gSTObNY")

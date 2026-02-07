@@ -213,7 +213,7 @@ public class WordleSimViewerApp extends Application {
     private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK) {
         Wordle wordle = Wordle.start(maxAttempts, length, answersFile);
 
-        WordleRegex solver = new WordleRegex();
+        WordleConstraint solver = new WordleConstraint();
         solver.setWordList(answersFile);
 
         List<StepDetail> steps = new ArrayList<>();

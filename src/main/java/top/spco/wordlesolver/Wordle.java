@@ -3,7 +3,7 @@ package top.spco.wordlesolver;
 import me.tongfei.progressbar.ProgressBar;
 import me.tongfei.progressbar.ProgressBarBuilder;
 import me.tongfei.progressbar.ProgressBarStyle;
-import top.spco.wordlesolver.WordleRegex.LetterColor;
+import top.spco.wordlesolver.WordleConstraint.LetterColor;
 
 import java.io.File;
 import java.io.IOException;
@@ -154,7 +154,7 @@ public class Wordle {
         for (int i = 0; i < testTimes; i++) {
             File answers = new File("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers");
             Wordle wordle = start(6, 5, answers);
-            WordleRegex solver = new WordleRegex();
+            WordleConstraint solver = new WordleConstraint();
             solver.setWordList(answers);
             LinkedHashMap<String,String> attemptResultMap = new LinkedHashMap<>();
             try {

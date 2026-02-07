@@ -5,7 +5,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class WordleRegex {
+public class WordleConstraint {
     private final int length;
     private File wordList;
     private final HashMap<Integer, HashSet<Character>> cannotBe = new HashMap<>();
@@ -13,11 +13,11 @@ public class WordleRegex {
     private final HashMap<Integer, Character> mustBe = new HashMap<>();
     private WordListData data;
 
-    public WordleRegex(int length) {
+    public WordleConstraint(int length) {
         this.length = length;
     }
 
-    public WordleRegex() {
+    public WordleConstraint() {
         this(5);
     }
 
@@ -62,7 +62,6 @@ public class WordleRegex {
         List<String> sortedAnswers = new ArrayList<>(answers);
         sortedAnswers.sort((a, b) -> Integer.compare(calculateWordScore(b), calculateWordScore(a)));
         Map<String, Integer> finalAnswers = new LinkedHashMap<>();
-        System.out.println(answers.size());
         for (String answer : sortedAnswers) {
             finalAnswers.put(answer.toLowerCase(), calculateWordScore(answer));
         }
@@ -109,9 +108,9 @@ public class WordleRegex {
         for (Map.Entry<Character, Integer> entry : charRepeatCount.entrySet()) {
             int repeatCount = entry.getValue();
 
-            // 设定一个重复字母惩罚系数（例如，重复出现超过2次时，每次出现减分）
+            // 设定一个重复字母惩罚系数
             if (repeatCount > 1) {
-                score -= (int) Math.pow(0, repeatCount);
+                score -= (int) Math.pow(25, repeatCount);
             }
         }
 
@@ -163,29 +162,29 @@ public class WordleRegex {
         this.wordList = wordList;
     }
 
-    public WordleRegex setLetter(int letterPos, char c) {
+    public WordleConstraint setLetter(int letterPos, char c) {
         if (isValidPos(letterPos)) {
             mustBe.put(letterPos - 1, c);
         }
         return this;
     }
 
-    public WordleRegex setLetter(int letterPos, String cs) {
+    public WordleConstraint setLetter(int letterPos, String cs) {
         return setLetter(letterPos, stringToChars(cs, true)[0]);
     }
 
-    public WordleRegex notHave(char... cs) {
+    public WordleConstraint notHave(char... cs) {
         for (int i = 1; i <= this.length; i++) {
             cannotBe(i, cs);
         }
         return this;
     }
 
-    public WordleRegex notHave(String cs) {
+    public WordleConstraint notHave(String cs) {
         return notHave(stringToChars(cs, false));
     }
 
-    public WordleRegex cannotBe(int letterPos, char... cs) {
+    public WordleConstraint cannotBe(int letterPos, char... cs) {
         if (!isValidPos(letterPos)) {
             return this;
         }
@@ -202,28 +201,28 @@ public class WordleRegex {
         return this;
     }
 
-    public WordleRegex cannotBe(int letterPos, String chars) {
+    public WordleConstraint cannotBe(int letterPos, String chars) {
         return cannotBe(letterPos, stringToChars(chars, false));
     }
 
-    public WordleRegex hasWord(char... cs) {
+    public WordleConstraint hasWord(char... cs) {
         for (char c : cs) {
             hasWords.add(c);
         }
         return this;
     }
 
-    public WordleRegex hasWord(String cs) {
+    public WordleConstraint hasWord(String cs) {
         return hasWord(stringToChars(cs, false));
     }
 
-    public WordleRegex yellowBlock(int letterPos, char c) {
+    public WordleConstraint yellowBlock(int letterPos, char c) {
         cannotBe(letterPos, c);
         hasWord(c);
         return this;
     }
 
-    public WordleRegex yellowBlock(int letterPos, String cs) {
+    public WordleConstraint yellowBlock(int letterPos, String cs) {
         char[] chars = stringToChars(cs, false);
         for (char c : chars) {
             yellowBlock(letterPos, c);
@@ -231,7 +230,7 @@ public class WordleRegex {
         return this;
     }
 
-    public WordleRegex yellowBlock(String word) {
+    public WordleConstraint yellowBlock(String word) {
         if (word == null) {
             return this;
         }
@@ -248,7 +247,7 @@ public class WordleRegex {
         return this;
     }
 
-    public WordleRegex mustBe(String word) {
+    public WordleConstraint mustBe(String word) {
         if (word == null) {
             return this;
         }
@@ -295,7 +294,7 @@ public class WordleRegex {
         return wordList;
     }
 
-    public WordleRegex guess(String guessResult) {
+    public WordleConstraint guess(String guessResult) {
         LetterColor inColor = null;
         HashMap<Character, LetterColor> appearedLetters = new HashMap<>();
         int pos = 0;
