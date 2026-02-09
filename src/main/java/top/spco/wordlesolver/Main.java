@@ -5,11 +5,11 @@ import java.io.File;
 public class Main {
     public static void main(String[] args) {
         WordleConstraint solver = new WordleConstraint();
+        WordleScorer scorer = new WordleScorer();
         solver.setWordList(new File("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers"));
-        solver.guess("gSTbARE")
-                .guess("gSTObNY")
-                .guess("gSTObMP")
+        solver.guess("bSTyAgRbE")
+                .guess("bHgAbIgRY")
         ;
-        System.out.println(solver.printAnswers(true).getFirst());
+        System.out.println(scorer.rankCandidates(solver).getFirst());
     }
 }

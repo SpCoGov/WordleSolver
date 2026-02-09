@@ -11,7 +11,8 @@ public class WordleConstraint {
     private final HashMap<Integer, HashSet<Character>> cannotBe = new HashMap<>();
     private final HashSet<Character> hasWords = new HashSet<>();
     private final HashMap<Integer, Character> mustBe = new HashMap<>();
-    private WordListData data;
+    private final HashMap<Character, Integer> minCharCounts = new HashMap<>();
+    private final HashMap<Character, Integer> maxCharCounts = new HashMap<>();
 
     public WordleConstraint(int length) {
         this.length = length;
@@ -19,6 +20,24 @@ public class WordleConstraint {
 
     public WordleConstraint() {
         this(5);
+    }
+
+    public int getLength() {
+        return length;
+    }
+
+    public Set<String> allWords() {
+        if (wordList == null) {
+            return new HashSet<>();
+        }
+        Set<String> words = toWordList(wordList);
+        HashSet<String> filtered = new HashSet<>();
+        for (String word : words) {
+            if (word.length() == length) {
+                filtered.add(word);
+            }
+        }
+        return filtered;
     }
 
     public HashSet<String> answers() {
@@ -36,125 +55,50 @@ public class WordleConstraint {
         return matchingWords;
     }
 
-    public List<String> printAnswers(boolean withScore, boolean returnOnly) {
-        HashSet<String> answers = answers();
-        genData();
-        List<String> finalAnswers = new ArrayList<>(answers);
-        // 对所有单词排序，优先含有最多高出现率字符的单词，同时考虑重复字母的惩罚
-        finalAnswers.sort((a, b) -> Integer.compare(calculateWordScore(b), calculateWordScore(a)));
 
-        if (!returnOnly) {
-            if (withScore) {
-                // 打印出排序后的单词和分数
-                finalAnswers.forEach(s -> System.out.println(s.toLowerCase() + "\t" + calculateWordScore(s)));
-            } else {
-                // 仅打印出排序后的单词
-                finalAnswers.forEach(s -> System.out.println(s.toLowerCase()));
-            }
-        }
-
-        return finalAnswers;
-    }
-
-    public Map<String, Integer> answerScoreMap() {
-        HashSet<String> answers = answers();
-        genData();
-        List<String> sortedAnswers = new ArrayList<>(answers);
-        sortedAnswers.sort((a, b) -> Integer.compare(calculateWordScore(b), calculateWordScore(a)));
-        Map<String, Integer> finalAnswers = new LinkedHashMap<>();
-        for (String answer : sortedAnswers) {
-            finalAnswers.put(answer.toLowerCase(), calculateWordScore(answer));
-        }
-
-        return finalAnswers;
-    }
-
-    public List<String> printAnswers() {
-        return printAnswers(false);
-    }
-
-    public List<String> printAnswers(boolean withScore) {
-        return printAnswers(withScore, false);
-    }
-
-    private static boolean hasDuplicateLetters(String word) {
-        Set<Character> seen = new HashSet<>();
-        for (char c : word.toUpperCase().toCharArray()) {
-            if (!seen.add(c)) { // 如果添加失败，说明有重复字母
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private int calculateWordScore(String word) {
-        int score = 0;
-        String upperWord = word.toUpperCase();
-        StringBuilder sb = new StringBuilder(word).append("评分细则：");
-
-        // 记录重复字母的出现次数
-        HashMap<Character, Integer> charRepeatCount = new HashMap<>();
-        // 累加字符总频率
-        for (char c : upperWord.toCharArray()) {
-            int times = data.charOccurrences.getOrDefault(c, 0);
-            sb.append("+").append(times).append("(字母").append(c).append("的出现频率为").append(times).append(")");
-            score += times;
-
-            // 记录重复字母的数量
-            charRepeatCount.put(c, charRepeatCount.getOrDefault(c, 0) + 1);
-        }
-
-        // 对重复字母进行减分，避免过度加权
-        for (Map.Entry<Character, Integer> entry : charRepeatCount.entrySet()) {
-            int repeatCount = entry.getValue();
-
-            // 设定一个重复字母惩罚系数
-            if (repeatCount > 1) {
-                score -= (int) Math.pow(25, repeatCount);
-            }
-        }
-
-        // 累加每个位置高频字母的分数
-        for (int i = 0; i < upperWord.length(); i++) {
-            char c = upperWord.charAt(i);
-            Map<Character, Integer> positionMap = data.positionCharOccurrences.getOrDefault(i, new HashMap<>());
-            int maxFrequency = positionMap.values().stream().max(Integer::compare).orElse(0);
-            int charFrequency = positionMap.getOrDefault(c, 0);
-            if (charFrequency == maxFrequency && charFrequency > 0) {
-                score += 100; // 高权重值
-                sb.append("  +100 (位置 ").append(i)
-                        .append(" 的字母 ").append(c)
-                        .append(" 是该位置的高频字母，出现频率为 ").append(charFrequency).append(")\n");
-            }
-        }
-        sb.append("=").append(score);
-        return score;
-    }
 
     public String toRegex() {   
-        if (hasWords.isEmpty() && mustBe.isEmpty() && cannotBe.isEmpty()) {
-            return "^[a-zA-Z]{" + length + "}$";
+        if (hasWords.isEmpty() && minCharCounts.isEmpty() && maxCharCounts.isEmpty() && mustBe.isEmpty() && cannotBe.isEmpty()) {
+            return "^[A-Z]{" + length + "}$";
         }
 
-        StringBuilder regex = new StringBuilder("\\b");
+        StringBuilder regex = new StringBuilder("^");
+        for (Map.Entry<Character, Integer> entry : minCharCounts.entrySet()) {
+            char c = entry.getKey();
+            int count = entry.getValue();
+            if (count > 0) {
+                regex.append("(?=(?:.*").append(c).append("){").append(count).append(",})");
+            }
+        }
+        for (Map.Entry<Character, Integer> entry : maxCharCounts.entrySet()) {
+            char c = entry.getKey();
+            int count = entry.getValue();
+            if (count >= 0) {
+                regex.append("(?!(?:.*").append(c).append("){").append(count + 1).append(",})");
+            }
+        }
         for (char c : this.hasWords) {
-            regex.append("(?=\\w*").append(c).append(")");
+            if (!minCharCounts.containsKey(c)) {
+                regex.append("(?=(?:.*").append(c).append("){1,})");
+            }
         }
         for (int i = 0; i < length; i++) {
             if (mustBe.containsKey(i)) {
                 regex.append(mustBe.get(i));
                 continue;
             }
-            regex.append("[^");
-            if (cannotBe.containsKey(i)) {
+            if (cannotBe.containsKey(i) && !cannotBe.get(i).isEmpty()) {
+                regex.append("[A-Z&&[^");
                 HashSet<Character> set = cannotBe.get(i);
                 for (char c : set) {
                     regex.append(c);
                 }
+                regex.append("]]");
+            } else {
+                regex.append("[A-Z]");
             }
-            regex.append("]");
         }
-        regex.append("\\b");
+        regex.append("$");
         return regex.toString();
     }
 
@@ -164,7 +108,7 @@ public class WordleConstraint {
 
     public WordleConstraint setLetter(int letterPos, char c) {
         if (isValidPos(letterPos)) {
-            mustBe.put(letterPos - 1, c);
+            mustBe.put(letterPos - 1, Character.toUpperCase(c));
         }
         return this;
     }
@@ -176,6 +120,9 @@ public class WordleConstraint {
     public WordleConstraint notHave(char... cs) {
         for (int i = 1; i <= this.length; i++) {
             cannotBe(i, cs);
+        }
+        for (char c : cs) {
+            maxCharCounts.put(Character.toUpperCase(c), 0);
         }
         return this;
     }
@@ -195,7 +142,7 @@ public class WordleConstraint {
             set = new HashSet<>();
         }
         for (char c : cs) {
-            set.add(c);
+            set.add(Character.toUpperCase(c));
         }
         cannotBe.put(letterPos - 1, set);
         return this;
@@ -207,7 +154,9 @@ public class WordleConstraint {
 
     public WordleConstraint hasWord(char... cs) {
         for (char c : cs) {
-            hasWords.add(c);
+            char upper = Character.toUpperCase(c);
+            hasWords.add(upper);
+            updateMinCount(upper, 1);
         }
         return this;
     }
@@ -264,9 +213,6 @@ public class WordleConstraint {
         return this;
     }
 
-    public void genData() {
-        this.data = new WordListData(length, answers());
-    }
 
     private char[] stringToChars(String str, boolean singleOnly) {
         char[] chars = str.toUpperCase().toCharArray();
@@ -296,7 +242,8 @@ public class WordleConstraint {
 
     public WordleConstraint guess(String guessResult) {
         LetterColor inColor = null;
-        HashMap<Character, LetterColor> appearedLetters = new HashMap<>();
+        List<Character> letters = new ArrayList<>();
+        List<LetterColor> colors = new ArrayList<>();
         int pos = 0;
         for (char c : guessResult.toCharArray()) {
             if (Character.isUpperCase(c)) {
@@ -307,107 +254,76 @@ public class WordleConstraint {
                 if (inColor == null) {
                     throw new IllegalArgumentException("Color of undefined letters.");
                 }
-                switch (inColor) {
-                    case BLACK -> {
-                        if (appearedLetters.containsKey(c) && appearedLetters.get(c) == LetterColor.YELLOW) {
-                            cannotBe(pos, c);
-                            continue;
-                        }
-                        notHave(c);
-                        appearedLetters.put(c, LetterColor.BLACK);
-                    }
-                    case GREEN -> {
-                        setLetter(pos, c);
-                        appearedLetters.put(c, LetterColor.GREEN);
-                    }
-                    case YELLOW -> {
-                        yellowBlock(pos, c);
-                        appearedLetters.put(c, LetterColor.YELLOW);
-                    }
-                }
+                letters.add(c);
+                colors.add(inColor);
             } else {
                 inColor = LetterColor.toLetterColor(String.valueOf(c));
                 if (inColor == null) {
                     throw new IllegalArgumentException("Unknown color: " + c + ".");
                 }
             }
-
         }
         if (pos != this.length) {
             throw new IllegalArgumentException("The guess does not match the word length.");
         }
+
+        HashMap<Character, Integer> nonBlackCounts = new HashMap<>();
+        HashMap<Character, Integer> blackCounts = new HashMap<>();
+        for (int i = 0; i < letters.size(); i++) {
+            char letter = letters.get(i);
+            LetterColor color = colors.get(i);
+            if (color == LetterColor.BLACK) {
+                blackCounts.put(letter, blackCounts.getOrDefault(letter, 0) + 1);
+            } else {
+                nonBlackCounts.put(letter, nonBlackCounts.getOrDefault(letter, 0) + 1);
+            }
+        }
+
+        for (Map.Entry<Character, Integer> entry : nonBlackCounts.entrySet()) {
+            updateMinCount(entry.getKey(), entry.getValue());
+            hasWords.add(entry.getKey());
+        }
+        for (Map.Entry<Character, Integer> entry : blackCounts.entrySet()) {
+            char letter = entry.getKey();
+            int maxCount = nonBlackCounts.getOrDefault(letter, 0);
+            updateMaxCount(letter, maxCount);
+        }
+
+        for (int i = 0; i < letters.size(); i++) {
+            char letter = letters.get(i);
+            LetterColor color = colors.get(i);
+            int letterPos = i + 1;
+            switch (color) {
+                case BLACK -> {
+                    if (nonBlackCounts.getOrDefault(letter, 0) > 0) {
+                        cannotBe(letterPos, letter);
+                    } else {
+                        notHave(letter);
+                    }
+                }
+                case GREEN -> setLetter(letterPos, letter);
+                case YELLOW -> cannotBe(letterPos, letter);
+            }
+        }
         return this;
     }
 
-    public static class WordListData implements Serializable {
-        @Serial
-        private static final long serialVersionUID = 7167948794795625313L;
-        private final Set<String> wordList;
-        private final int length;
-        private final HashMap<Character, Integer> charOccurrences = new HashMap<>();
-        private final HashMap<Integer, HashMap<Character, Integer>> positionCharOccurrences = new HashMap<>();
-
-        public WordListData(int length, Set<String> wordList) {
-            this.length = length;
-            this.wordList = wordList;
-            countCharOccurrence();
-            calculatePositionCharOccurrences();
-        }
-
-        private void countCharOccurrence() {
-            for (String line : wordList) {
-                if (line.length() != this.length) {
-                    continue;
-                }
-                for (char c : line.toCharArray()) {
-                    charOccurrences.put(c, charOccurrences.getOrDefault(c, 0) + 1);
-                }
-            }
-        }
-
-        private void calculatePositionCharOccurrences() {
-            for (String line : wordList) {
-                line = line.toUpperCase();
-                for (int i = 0; i < line.length(); i++) {
-                    if (line.length() != this.length) {
-                        continue;
-                    }
-                    if (positionCharOccurrences.size() <= i) {
-                        positionCharOccurrences.put(i, new HashMap<>());
-                    }
-                    Map<Character, Integer> positionMap = positionCharOccurrences.get(i);
-                    char c = line.charAt(i);
-                    positionMap.put(c, positionMap.getOrDefault(c, 0) + 1);
-                }
-            }
-        }
-
-        public int getCharOccurrence(char c) {
-            return charOccurrences.getOrDefault(Character.toUpperCase(c), 0);
-        }
-
-        public Set<Character> appearedChars() {
-            return charOccurrences.keySet();
-        }
-
-        public Set<Character> positionAppearedChars(int index) {
-            if (index < 0 || index >= this.length) {
-                throw new IllegalArgumentException("index is out of bounds");
-            }
-            return positionCharOccurrences.getOrDefault(index, new HashMap<>()).keySet();
-        }
-
-        public int getPositionCharOccurrence(int index, char c) {
-            if (index < 0 || index >= this.length) {
-                throw new IllegalArgumentException("index is out of range");
-            }
-            return positionCharOccurrences.getOrDefault(index, new HashMap<>()).getOrDefault(Character.toUpperCase(c), 0);
-        }
-
-        public int getLength() {
-            return length;
+    private void updateMinCount(char c, int min) {
+        char upper = Character.toUpperCase(c);
+        int current = minCharCounts.getOrDefault(upper, 0);
+        if (min > current) {
+            minCharCounts.put(upper, min);
         }
     }
+
+    private void updateMaxCount(char c, int max) {
+        char upper = Character.toUpperCase(c);
+        int current = maxCharCounts.getOrDefault(upper, Integer.MAX_VALUE);
+        if (max < current) {
+            maxCharCounts.put(upper, max);
+        }
+    }
+
 
     public enum LetterColor {
         YELLOW,

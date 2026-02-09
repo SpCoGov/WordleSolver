@@ -19,25 +19,48 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 public class WordleSimViewerApp extends Application {
 
+    private static final ScoreParams DEFAULT_PARAMS = defaultScoreParams();
     private final TextField tfTestTimes = new TextField("10000");
     private final TextField tfTopK = new TextField("50");
     private final TextField tfMaxAttempts = new TextField("6");
     private final TextField tfWordLength = new TextField("5");
+    private final TextField tfThreads = new TextField(String.valueOf(Math.max(1, Runtime.getRuntime().availableProcessors())));
     private final TextField tfAnswersPath = new TextField("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers");
+    private final TextField tfCharFrequencyWeight = new TextField(String.valueOf(DEFAULT_PARAMS.charFrequencyWeight));
+    private final TextField tfPositionTopBonus = new TextField(String.valueOf(DEFAULT_PARAMS.positionTopBonus));
+    private final TextField tfRepeatPenaltyBase = new TextField(String.valueOf(DEFAULT_PARAMS.repeatPenaltyBase));
 
     private final Button btnRun = new Button("Run");
+    private final Button btnStop = new Button("Stop");
     private final ProgressBar progressBar = new ProgressBar(0);
     private final Label lbStats = new Label("Ready.");
 
     private final TableView<FailureRecord> tvFailures = new TableView<>();
+    private final TextArea taReport = new TextArea();
     private final TextArea taDetails = new TextArea();
+    private Task<SimSummary> currentTask;
+    private java.util.concurrent.ExecutorService currentExecutor;
 
     @Override
     public void start(Stage stage) {
+        TabPane tabPane = new TabPane();
+        Tab simTab = new Tab("Simulation", createSimulationPane());
+        Tab manualTab = new Tab("手动猜词", createManualGuessPane());
+        tabPane.getTabs().addAll(simTab, manualTab);
+        tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        Scene scene = new Scene(tabPane, 1200, 720);
+        stage.setTitle("Wordle Simulation Viewer");
+        stage.setScene(scene);
+        stage.show();
+    }
+
+    private SplitPane createSimulationPane() {
         GridPane controls = new GridPane();
         controls.setHgap(10);
         controls.setVgap(8);
@@ -45,9 +68,11 @@ public class WordleSimViewerApp extends Application {
         int r = 0;
         controls.addRow(r++, new Label("Test Times"), tfTestTimes, new Label("TopK"), tfTopK);
         controls.addRow(r++, new Label("Max Attempts"), tfMaxAttempts, new Label("Word Length"), tfWordLength);
-        controls.addRow(r++, new Label("Answers File"), tfAnswersPath);
+        controls.addRow(r++, new Label("Threads"), tfThreads, new Label("Answers File"), tfAnswersPath);
+        controls.addRow(r++, new Label("CharWeight"), tfCharFrequencyWeight, new Label("PosBonus"), tfPositionTopBonus);
+        controls.addRow(r++, new Label("RepeatBase"), tfRepeatPenaltyBase);
 
-        HBox runBar = new HBox(10, btnRun, progressBar, lbStats);
+        HBox runBar = new HBox(10, btnRun, btnStop, progressBar, lbStats);
         runBar.setPadding(new Insets(8, 0, 0, 0));
         HBox.setHgrow(progressBar, Priority.ALWAYS);
         progressBar.setMaxWidth(Double.MAX_VALUE);
@@ -61,22 +86,231 @@ public class WordleSimViewerApp extends Application {
         VBox.setVgrow(tvFailures, Priority.ALWAYS);
 
         // Details
+        taReport.setEditable(false);
+        taReport.setWrapText(false);
+
         taDetails.setEditable(false);
         taDetails.setWrapText(false);
 
-        VBox right = new VBox(10, new Label("Failure Details"), taDetails);
+        VBox right = new VBox(
+                10,
+                new Label("Report"),
+                taReport,
+                new Label("Failure Details"),
+                taDetails
+        );
         right.setPadding(new Insets(12));
+        VBox.setVgrow(taReport, Priority.NEVER);
         VBox.setVgrow(taDetails, Priority.ALWAYS);
 
         SplitPane splitPane = new SplitPane(left, right);
         splitPane.setDividerPositions(0.55);
 
         btnRun.setOnAction(e -> runSimulations());
+        btnStop.setOnAction(e -> stopSimulations());
+        btnStop.setDisable(true);
 
-        Scene scene = new Scene(splitPane, 1200, 720);
-        stage.setTitle("Wordle Simulation Viewer");
-        stage.setScene(scene);
-        stage.show();
+        return splitPane;
+    }
+
+    private SplitPane createManualGuessPane() {
+        final int maxAttempts = 6;
+        final int wordLength = 5;
+
+        TextField tfManualAnswersPath = new TextField(tfAnswersPath.getText());
+        TextField tfManualTopK = new TextField("200");
+        Button btnRefresh = new Button("刷新候选");
+        Button btnReset = new Button("重置");
+        Label lbStatus = new Label("请输入猜测并选择颜色，然后确认。");
+        Label lbCandidates = new Label("候选: 0");
+
+        TableView<CandidateScore> tvCandidates = new TableView<>();
+        TableColumn<CandidateScore, String> colWord = new TableColumn<>("单词");
+        colWord.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().word));
+        TableColumn<CandidateScore, Number> colScore = new TableColumn<>("分数");
+        colScore.setCellValueFactory(c -> new SimpleIntegerProperty(c.getValue().score));
+        tvCandidates.getColumns().add(colWord);
+        tvCandidates.getColumns().add(colScore);
+        tvCandidates.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+
+        VBox left = new VBox(8, new Label("候选列表"), lbCandidates, tvCandidates);
+        left.setPadding(new Insets(12));
+        VBox.setVgrow(tvCandidates, Priority.ALWAYS);
+
+        HBox topRow = new HBox(10,
+                new Label("答案库"),
+                tfManualAnswersPath,
+                new Label("TopK"),
+                tfManualTopK,
+                btnRefresh,
+                btnReset
+        );
+        HBox.setHgrow(tfManualAnswersPath, Priority.ALWAYS);
+
+        VBox attemptsBox = new VBox(8);
+        List<ManualAttemptRow> rows = new ArrayList<>();
+        for (int i = 0; i < maxAttempts; i++) {
+            ManualAttemptRow row = new ManualAttemptRow(wordLength, i + 1);
+            rows.add(row);
+            attemptsBox.getChildren().add(row.container);
+        }
+
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            ManualAttemptRow row = rows.get(rowIndex);
+            for (int pos = 0; pos < wordLength; pos++) {
+                int finalRowIndex = rowIndex;
+                int finalPos = pos;
+                ComboBox<String> cb = row.colorBoxes.get(pos);
+                cb.valueProperty().addListener((obs, old, val) -> {
+                    if ("G(绿)".equals(val)) {
+                        for (int r = finalRowIndex + 1; r < rows.size(); r++) {
+                            rows.get(r).colorBoxes.get(finalPos).getSelectionModel().select("G(绿)");
+                        }
+                    }
+                });
+            }
+        }
+
+        Button btnConfirm = new Button("确认本次结果");
+        VBox right = new VBox(12, topRow, attemptsBox, btnConfirm, lbStatus);
+        right.setPadding(new Insets(12));
+        VBox.setVgrow(attemptsBox, Priority.ALWAYS);
+
+        SplitPane splitPane = new SplitPane(left, right);
+        splitPane.setDividerPositions(0.35);
+
+        final int[] currentAttempt = {0};
+        final WordleConstraint[] constraintRef = {new WordleConstraint(wordLength)};
+        final WordleScorer scorer = new WordleScorer();
+
+        Runnable applyScoreParams = () -> applyScoreParams(scorer, readScoreParams());
+
+        Runnable refreshCandidates = () -> {
+            File answersFile = new File(tfManualAnswersPath.getText().trim());
+            if (!answersFile.exists()) {
+                showAlert("答案库路径不存在: " + answersFile.getAbsolutePath());
+                return;
+            }
+            constraintRef[0].setWordList(answersFile);
+            applyScoreParams.run();
+
+            int topK = parseInt(tfManualTopK.getText(), 200);
+            Map<String, Integer> scoreMap = scorer.scoreMap(constraintRef[0].answers(), wordLength);
+            List<CandidateScore> candidates = scoreMap.entrySet().stream()
+                    .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                    .limit(Math.max(1, topK))
+                    .map(e -> new CandidateScore(e.getKey().toUpperCase(), e.getValue()))
+                    .collect(Collectors.toList());
+
+            tvCandidates.setItems(FXCollections.observableArrayList(candidates));
+            lbCandidates.setText(String.format("候选: %d / 显示: %d", scoreMap.size(), candidates.size()));
+        };
+
+        Runnable resetManual = () -> {
+            constraintRef[0] = new WordleConstraint(wordLength);
+            currentAttempt[0] = 0;
+            for (int i = 0; i < rows.size(); i++) {
+                ManualAttemptRow row = rows.get(i);
+                row.clear();
+                row.setEnabled(i == 0);
+            }
+            btnConfirm.setDisable(false);
+            lbStatus.setText("请输入猜测并选择颜色，然后确认。");
+            refreshCandidates.run();
+        };
+
+        for (int i = 0; i < rows.size(); i++) {
+            rows.get(i).setEnabled(i == 0);
+        }
+
+        tvCandidates.setRowFactory(tv -> {
+            TableRow<CandidateScore> row = new TableRow<>();
+            row.setOnMouseClicked(ev -> {
+                if (ev.getClickCount() == 2 && !row.isEmpty()) {
+                    ManualAttemptRow currentRow = rows.get(currentAttempt[0]);
+                    currentRow.tfGuess.setText(row.getItem().word.toUpperCase());
+                }
+            });
+            return row;
+        });
+
+        btnConfirm.setOnAction(e -> {
+            if (currentAttempt[0] >= maxAttempts) {
+                btnConfirm.setDisable(true);
+                return;
+            }
+            ManualAttemptRow row = rows.get(currentAttempt[0]);
+            String guess = row.tfGuess.getText().trim().toUpperCase();
+            if (guess.length() != wordLength || !guess.chars().allMatch(Character::isLetter)) {
+                showAlert("请输入 5 个字母的单词。");
+                return;
+            }
+            String guessResult = buildGuessResult(guess, row.colorBoxes);
+            try {
+                constraintRef[0].guess(guessResult);
+            } catch (Exception ex) {
+                showAlert("颜色或结果不合法: " + ex.getMessage());
+                return;
+            }
+
+            row.setEnabled(false);
+            currentAttempt[0]++;
+            if (currentAttempt[0] < maxAttempts) {
+                rows.get(currentAttempt[0]).setEnabled(true);
+                lbStatus.setText("已确认第 " + currentAttempt[0] + " 次，继续下一次。");
+            } else {
+                lbStatus.setText("已完成 6 次猜测。");
+                btnConfirm.setDisable(true);
+            }
+            refreshCandidates.run();
+        });
+
+        btnRefresh.setOnAction(e -> refreshCandidates.run());
+        btnReset.setOnAction(e -> resetManual.run());
+
+        refreshCandidates.run();
+        return splitPane;
+    }
+
+    private static String buildGuessResult(String guess, List<ComboBox<String>> colorBoxes) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < guess.length(); i++) {
+            String value = colorBoxes.get(i).getValue();
+            char code = value == null || value.isEmpty() ? 'b' : Character.toLowerCase(value.charAt(0));
+            sb.append(code).append(guess.charAt(i));
+        }
+        return sb.toString();
+    }
+
+    private static TextField createGuessField(int maxLength) {
+        TextField tf = new TextField();
+        UnaryOperator<TextFormatter.Change> filter = change -> {
+            String text = change.getControlNewText();
+            if (text.length() > maxLength) {
+                return null;
+            }
+            if (!text.chars().allMatch(Character::isLetter)) {
+                return null;
+            }
+            return change;
+        };
+        tf.setTextFormatter(new TextFormatter<>(filter));
+        tf.textProperty().addListener((obs, old, val) -> {
+            if (val != null) {
+                String upper = val.toUpperCase();
+                if (!upper.equals(val)) {
+                    tf.setText(upper);
+                }
+            }
+        });
+        tf.setPrefColumnCount(maxLength + 1);
+        return tf;
+    }
+
+    private static void showAlert(String message) {
+        Alert alert = new Alert(Alert.AlertType.WARNING, message, ButtonType.OK);
+        alert.setHeaderText(null);
+        alert.showAndWait();
     }
 
     private void setupFailuresTable() {
@@ -92,7 +326,10 @@ public class WordleSimViewerApp extends Application {
         TableColumn<FailureRecord, String> colLastGuess = new TableColumn<>("Last Guess");
         colLastGuess.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().lastGuess));
 
-        tvFailures.getColumns().addAll(colIndex, colAnswer, colAttempts, colLastGuess);
+        tvFailures.getColumns().add(colIndex);
+        tvFailures.getColumns().add(colAnswer);
+        tvFailures.getColumns().add(colAttempts);
+        tvFailures.getColumns().add(colLastGuess);
         tvFailures.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
 
         tvFailures.getSelectionModel().selectedItemProperty().addListener((obs, old, selected) -> {
@@ -109,14 +346,17 @@ public class WordleSimViewerApp extends Application {
         int topK = parseInt(tfTopK.getText(), 20);
         int maxAttempts = parseInt(tfMaxAttempts.getText(), 6);
         int length = parseInt(tfWordLength.getText(), 5);
+        int threads = Math.max(1, parseInt(tfThreads.getText(), Runtime.getRuntime().availableProcessors()));
         File answersFile = new File(tfAnswersPath.getText().trim());
 
         btnRun.setDisable(true);
+        btnStop.setDisable(false);
 
         var failuresList = FXCollections.<FailureRecord>observableArrayList();
         tvFailures.setItems(failuresList);
 
         taDetails.clear();
+        taReport.clear();
         lbStats.setText("Running...");
         progressBar.setProgress(0);
 
@@ -125,28 +365,49 @@ public class WordleSimViewerApp extends Application {
             protected SimSummary call() {
                 long start = System.currentTimeMillis();
 
+                ScoreParams scoreParams = readScoreParams();
                 int wins = 0;
                 int completed = 0;
                 long attemptsSum = 0;
 
+                var executor = java.util.concurrent.Executors.newFixedThreadPool(threads);
+                currentExecutor = executor;
+                var completion = new java.util.concurrent.ExecutorCompletionService<SimResult>(executor);
+
                 for (int i = 0; i < testTimes; i++) {
-                    SimResult result = runSingleGame(i, maxAttempts, length, answersFile, topK);
+                    final int index = i;
+                    completion.submit(() -> runSingleGame(index, maxAttempts, length, answersFile, topK, scoreParams));
+                }
 
-                    completed++;
-                    attemptsSum += result.attempts;
+                try {
+                    for (int i = 0; i < testTimes; i++) {
+                        if (isCancelled()) {
+                            break;
+                        }
+                        SimResult result = completion.take().get();
 
-                    if (result.win) {
-                        wins++;
-                    } else {
-                        FailureRecord fr = FailureRecord.from(result);
+                        completed++;
+                        attemptsSum += result.attempts;
 
-                        Platform.runLater(() -> failuresList.add(fr));
+                        if (result.win) {
+                            wins++;
+                        } else {
+                            FailureRecord fr = FailureRecord.from(result);
+
+                            Platform.runLater(() -> failuresList.add(fr));
+                        }
+
+                        if (i % 5 == 0) {
+                            updateProgress(i + 1, testTimes);
+                            updateMessage(buildStats(completed, wins, failuresList.size(), attemptsSum));
+                        }
                     }
-
-                    if (i % 5 == 0) {
-                        updateProgress(i + 1, testTimes);
-                        updateMessage(buildStats(completed, wins, failuresList.size(), attemptsSum));
+                } catch (Exception ex) {
+                    if (!isCancelled()) {
+                        throw new RuntimeException(ex);
                     }
+                } finally {
+                    executor.shutdownNow();
                 }
 
                 long end = System.currentTimeMillis();
@@ -158,9 +419,13 @@ public class WordleSimViewerApp extends Application {
                 summary.failures = new ArrayList<>(failuresList); // 复制一份结果
                 summary.avgAttempts = completed == 0 ? 0 : (attemptsSum * 1.0 / completed);
                 summary.totalSeconds = (end - start) / 1000.0;
+                summary.scoreParams = scoreParams;
+                summary.threads = threads;
+                summary.cancelled = isCancelled();
                 return summary;
             }
         };
+        currentTask = task;
 
         progressBar.progressProperty().bind(task.progressProperty());
         lbStats.textProperty().bind(task.messageProperty());
@@ -179,7 +444,9 @@ public class WordleSimViewerApp extends Application {
                     summary.avgAttempts,
                     failuresList.size()
             ));
+            taReport.setText(buildReport(summary));
             btnRun.setDisable(false);
+            btnStop.setDisable(true);
         });
 
         task.setOnFailed(e -> {
@@ -187,12 +454,43 @@ public class WordleSimViewerApp extends Application {
             lbStats.textProperty().unbind();
             Throwable ex = task.getException();
             lbStats.setText("Failed: " + (ex == null ? "unknown error" : ex.getMessage()));
+            taReport.setText("Failed: " + (ex == null ? "unknown error" : ex.getMessage()));
             btnRun.setDisable(false);
+            btnStop.setDisable(true);
+        });
+        task.setOnCancelled(e -> {
+            progressBar.progressProperty().unbind();
+            lbStats.textProperty().unbind();
+            SimSummary summary = task.getValue();
+            if (summary == null) {
+                summary = new SimSummary();
+                summary.completed = 0;
+                summary.wins = 0;
+                summary.avgAttempts = 0;
+                summary.totalSeconds = 0;
+                summary.scoreParams = readScoreParams();
+                summary.threads = Math.max(1, parseInt(tfThreads.getText(), Runtime.getRuntime().availableProcessors()));
+                summary.cancelled = true;
+            }
+            lbStats.setText("Cancelled.");
+            taReport.setText(buildReport(summary));
+            btnRun.setDisable(false);
+            btnStop.setDisable(true);
         });
 
         Thread t = new Thread(task, "wordle-sim-task");
         t.setDaemon(true);
         t.start();
+    }
+
+    private void stopSimulations() {
+        if (currentTask != null) {
+            currentTask.cancel();
+        }
+        if (currentExecutor != null) {
+            currentExecutor.shutdownNow();
+        }
+        btnStop.setDisable(true);
     }
 
     private static String buildStats(int completed, int wins, int failures, long attemptsSum) {
@@ -210,18 +508,20 @@ public class WordleSimViewerApp extends Application {
         }
     }
 
-    private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK) {
+    private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK, ScoreParams scoreParams) {
         Wordle wordle = Wordle.start(maxAttempts, length, answersFile);
 
         WordleConstraint solver = new WordleConstraint();
         solver.setWordList(answersFile);
+        WordleScorer scorer = new WordleScorer();
+        applyScoreParams(scorer, scoreParams);
 
         List<StepDetail> steps = new ArrayList<>();
         Map<String, Integer> lastScoreMap = null;
 
         try {
             while (!wordle.isGameOver()) {
-                Map<String, Integer> scoreMap = solver.answerScoreMap();
+                Map<String, Integer> scoreMap = scorer.scoreMap(solver.answers(), solver.getLength());
                 lastScoreMap = scoreMap;
 
                 if (scoreMap.isEmpty()) {
@@ -298,6 +598,50 @@ public class WordleSimViewerApp extends Application {
         return sb.toString();
     }
 
+    private static ScoreParams defaultScoreParams() {
+        WordleScorer scorer = new WordleScorer();
+        ScoreParams params = new ScoreParams();
+        params.charFrequencyWeight = scorer.getCharFrequencyWeight();
+        params.positionTopBonus = scorer.getPositionTopBonus();
+        params.repeatPenaltyBase = scorer.getRepeatPenaltyBase();
+        return params;
+    }
+
+    private static void applyScoreParams(WordleScorer scorer, ScoreParams params) {
+        scorer.setCharFrequencyWeight(params.charFrequencyWeight);
+        scorer.setPositionTopBonus(params.positionTopBonus);
+        scorer.setRepeatPenaltyBase(params.repeatPenaltyBase);
+    }
+
+    private static String buildReport(SimSummary summary) {
+        double winRate = summary.completed == 0 ? 0 : (summary.wins * 100.0 / summary.completed);
+        StringBuilder sb = new StringBuilder();
+        sb.append("Report\n");
+        sb.append(String.format("Completed: %d%n", summary.completed));
+        sb.append(String.format("Wins: %d%n", summary.wins));
+        sb.append(String.format("Failures: %d%n", summary.completed - summary.wins));
+        sb.append(String.format("WinRate: %.2f%%%n", winRate));
+        sb.append(String.format("AvgAttempts: %.3f%n", summary.avgAttempts));
+        sb.append(String.format("Time: %.2fs%n", summary.totalSeconds));
+        sb.append(String.format("Threads: %d%n", summary.threads));
+        sb.append(String.format("Cancelled: %s%n", summary.cancelled));
+        if (summary.scoreParams != null) {
+            sb.append("\nScore Params\n");
+            sb.append(String.format("charFrequencyWeight: %d%n", summary.scoreParams.charFrequencyWeight));
+            sb.append(String.format("positionTopBonus: %d%n", summary.scoreParams.positionTopBonus));
+            sb.append(String.format("repeatPenaltyBase: %d%n", summary.scoreParams.repeatPenaltyBase));
+        }
+        return sb.toString();
+    }
+
+    private ScoreParams readScoreParams() {
+        ScoreParams params = new ScoreParams();
+        params.charFrequencyWeight = parseInt(tfCharFrequencyWeight.getText(), DEFAULT_PARAMS.charFrequencyWeight);
+        params.positionTopBonus = parseInt(tfPositionTopBonus.getText(), DEFAULT_PARAMS.positionTopBonus);
+        params.repeatPenaltyBase = parseInt(tfRepeatPenaltyBase.getText(), DEFAULT_PARAMS.repeatPenaltyBase);
+        return params;
+    }
+
     // ====== Data models ======
     static class CandidateScore {
         final String word;
@@ -306,6 +650,41 @@ public class WordleSimViewerApp extends Application {
         CandidateScore(String word, int score) {
             this.word = word;
             this.score = score;
+        }
+    }
+
+    static class ManualAttemptRow {
+        final HBox container;
+        final TextField tfGuess;
+        final List<ComboBox<String>> colorBoxes = new ArrayList<>();
+
+        ManualAttemptRow(int wordLength, int index) {
+            Label lbIndex = new Label("第 " + index + " 次");
+            this.tfGuess = createGuessField(wordLength);
+            this.tfGuess.setPromptText("五个字母");
+            HBox colors = new HBox(6);
+            for (int i = 0; i < wordLength; i++) {
+                ComboBox<String> cb = new ComboBox<>(FXCollections.observableArrayList("B(灰)", "Y(黄)", "G(绿)"));
+                cb.getSelectionModel().select(0);
+                cb.setPrefWidth(70);
+                colorBoxes.add(cb);
+                colors.getChildren().add(cb);
+            }
+            this.container = new HBox(8, lbIndex, tfGuess, colors);
+        }
+
+        void setEnabled(boolean enabled) {
+            tfGuess.setDisable(!enabled);
+            for (ComboBox<String> cb : colorBoxes) {
+                cb.setDisable(!enabled);
+            }
+        }
+
+        void clear() {
+            tfGuess.clear();
+            for (ComboBox<String> cb : colorBoxes) {
+                cb.getSelectionModel().select(0);
+            }
         }
     }
 
@@ -348,6 +727,15 @@ public class WordleSimViewerApp extends Application {
         double avgAttempts;
         double totalSeconds;
         List<FailureRecord> failures = List.of();
+        ScoreParams scoreParams;
+        int threads;
+        boolean cancelled;
+    }
+
+    static class ScoreParams {
+        int charFrequencyWeight;
+        int positionTopBonus;
+        int repeatPenaltyBase;
     }
 
     public static void main(String[] args) {

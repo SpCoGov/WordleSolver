@@ -156,10 +156,12 @@ public class Wordle {
             Wordle wordle = start(6, 5, answers);
             WordleConstraint solver = new WordleConstraint();
             solver.setWordList(answers);
+            WordleScorer scorer = new WordleScorer();
             LinkedHashMap<String,String> attemptResultMap = new LinkedHashMap<>();
             try {
                 do {
-                    String attemptWord = solver.printAnswers(true, true).getFirst();
+                    List<String> ranked = scorer.rankCandidates(solver);
+                    String attemptWord = ranked.getFirst();
                     String result = wordle.guess(attemptWord);
                     attemptResultMap.put(attemptWord, result);
                     if (result.equals("GAME OVER")) {
