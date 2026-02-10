@@ -9,16 +9,20 @@ import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
@@ -26,7 +30,7 @@ public class WordleSimViewerApp extends Application {
 
     private static final ScoreParams DEFAULT_PARAMS = defaultScoreParams();
     private final TextField tfTestTimes = new TextField("10000");
-    private final TextField tfTopK = new TextField("50");
+    private final TextField tfTopK = new TextField("20");
     private final TextField tfMaxAttempts = new TextField("6");
     private final TextField tfWordLength = new TextField("5");
     private final TextField tfThreads = new TextField(String.valueOf(Math.max(1, Runtime.getRuntime().availableProcessors())));
@@ -37,12 +41,14 @@ public class WordleSimViewerApp extends Application {
 
     private final Button btnRun = new Button("Run");
     private final Button btnStop = new Button("Stop");
+    private final Button btnCopyDetails = new Button("Copy Details");
     private final ProgressBar progressBar = new ProgressBar(0);
     private final Label lbStats = new Label("Ready.");
 
     private final TableView<FailureRecord> tvFailures = new TableView<>();
     private final TextArea taReport = new TextArea();
-    private final TextArea taDetails = new TextArea();
+    private final WebView wvDetails = new WebView();
+    private String currentFailureDetailsText = "";
     private Task<SimSummary> currentTask;
     private java.util.concurrent.ExecutorService currentExecutor;
 
@@ -89,19 +95,20 @@ public class WordleSimViewerApp extends Application {
         taReport.setEditable(false);
         taReport.setWrapText(false);
 
-        taDetails.setEditable(false);
-        taDetails.setWrapText(false);
+        wvDetails.setContextMenuEnabled(true);
+        setDetailsPlaceholder("Select a failed game to see details.");
+        btnCopyDetails.setOnAction(e -> copyDetailsToClipboard());
 
         VBox right = new VBox(
                 10,
                 new Label("Report"),
                 taReport,
-                new Label("Failure Details"),
-                taDetails
+                new HBox(8, new Label("Failure Details"), btnCopyDetails),
+                wvDetails
         );
         right.setPadding(new Insets(12));
         VBox.setVgrow(taReport, Priority.NEVER);
-        VBox.setVgrow(taDetails, Priority.ALWAYS);
+        VBox.setVgrow(wvDetails, Priority.ALWAYS);
 
         SplitPane splitPane = new SplitPane(left, right);
         splitPane.setDividerPositions(0.55);
@@ -325,19 +332,23 @@ public class WordleSimViewerApp extends Application {
 
         TableColumn<FailureRecord, String> colLastGuess = new TableColumn<>("Last Guess");
         colLastGuess.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().lastGuess));
+        TableColumn<FailureRecord, String> colTag = new TableColumn<>("Tag");
+        colTag.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().tag));
 
         tvFailures.getColumns().add(colIndex);
         tvFailures.getColumns().add(colAnswer);
         tvFailures.getColumns().add(colAttempts);
         tvFailures.getColumns().add(colLastGuess);
+        tvFailures.getColumns().add(colTag);
         tvFailures.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
 
         tvFailures.getSelectionModel().selectedItemProperty().addListener((obs, old, selected) -> {
             if (selected == null) {
-                taDetails.clear();
+                setDetailsPlaceholder("Select a failed game to see details.");
                 return;
             }
-            taDetails.setText(formatFailure(selected));
+            currentFailureDetailsText = formatFailureText(selected);
+            renderFailureRich(selected);
         });
     }
 
@@ -355,7 +366,7 @@ public class WordleSimViewerApp extends Application {
         var failuresList = FXCollections.<FailureRecord>observableArrayList();
         tvFailures.setItems(failuresList);
 
-        taDetails.clear();
+        setDetailsPlaceholder("Running...");
         taReport.clear();
         lbStats.setText("Running...");
         progressBar.setProgress(0);
@@ -511,17 +522,20 @@ public class WordleSimViewerApp extends Application {
     private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK, ScoreParams scoreParams) {
         Wordle wordle = Wordle.start(maxAttempts, length, answersFile);
 
-        WordleConstraint solver = new WordleConstraint();
-        solver.setWordList(answersFile);
-        WordleScorer scorer = new WordleScorer();
-        applyScoreParams(scorer, scoreParams);
+        WordleSolver solver = new WordleSolver(answersFile);
+        solver.setMaxGuessTime(maxAttempts);
+        applyScoreParams(solver, scoreParams);
 
         List<StepDetail> steps = new ArrayList<>();
         Map<String, Integer> lastScoreMap = null;
 
         try {
             while (!wordle.isGameOver()) {
-                Map<String, Integer> scoreMap = scorer.scoreMap(solver.answers(), solver.getLength());
+                Map<String, Integer> scoreMap = solver.printAnswers();
+                Set<String> guessed = solver.getGuessedWords();
+                if (!guessed.isEmpty()) {
+                    scoreMap.entrySet().removeIf(e -> guessed.contains(e.getKey().toUpperCase()));
+                }
                 lastScoreMap = scoreMap;
 
                 if (scoreMap.isEmpty()) {
@@ -539,8 +553,11 @@ public class WordleSimViewerApp extends Application {
                         .map(e -> new CandidateScore(e.getKey(), e.getValue()))
                         .collect(Collectors.toList());
 
-                // 选择当前最优候选作为猜测
-                String guessWord = topCandidates.get(0).word;
+                String guessWord = solver.nextGuess();
+                if (guessWord == null || guessWord.isEmpty()) {
+                    guessWord = topCandidates.get(0).word;
+                }
+                WordleSolver.GuessDecision decision = solver.getLastDecision();
 
                 String result = wordle.guess(guessWord);
 
@@ -548,12 +565,20 @@ public class WordleSimViewerApp extends Application {
                 step.guess = guessWord;
                 step.result = result;
                 step.topCandidates = topCandidates;
+                step.strategy = decision.strategy;
+                step.strategyReason = decision.strategyReason;
+                step.filterRounds = decision.filterRounds;
+                step.checkedWords = decision.checkedWords;
+                step.targetCoverage = decision.targetCoverage;
+                step.matchedWords = decision.matchedWords;
+                step.familyCandidates = decision.familyCandidates;
+                step.filterPath = decision.filterPath;
                 steps.add(step);
 
                 if ("GAME OVER".equals(result)) {
                     break;
                 }
-                solver.guess(result);
+                solver.applyGuess(guessWord, result);
             }
         } catch (Exception ex) {
             ex.printStackTrace();
@@ -577,7 +602,164 @@ public class WordleSimViewerApp extends Application {
         return r;
     }
 
-    private String formatFailure(FailureRecord fr) {
+    private void setDetailsPlaceholder(String message) {
+        wvDetails.getEngine().loadContent(
+                "<html><body style='margin:0;padding:10px;background:#0b1220;color:#9aa4b2;"
+                        + "font-family:Menlo,Consolas,monospace;font-size:12px;'>"
+                        + escapeHtml(message)
+                        + "</body></html>"
+        );
+        currentFailureDetailsText = message;
+    }
+
+    private void renderFailureRich(FailureRecord fr) {
+        wvDetails.getEngine().loadContent(formatFailureHtml(fr));
+    }
+
+    private void copyDetailsToClipboard() {
+        ClipboardContent content = new ClipboardContent();
+        content.putString(currentFailureDetailsText == null ? "" : currentFailureDetailsText);
+        Clipboard.getSystemClipboard().setContent(content);
+    }
+
+    private String formatFailureHtml(FailureRecord fr) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<html><head><style>")
+                .append("body{margin:0;padding:10px;background:#0b1220;color:#f8fafc;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.5;}")
+                .append(".title{color:#70b7ff;font-weight:700;margin-top:12px;}")
+                .append(".meta{color:#d9e2f2;}")
+                .append(".k{color:#9cdcfe;}")
+                .append(".v{color:#ffd166;}")
+                .append(".n{color:#4ec9b0;}")
+                .append(".muted{color:#c5cbd6;}")
+                .append(".word{background:#233047;color:#ffd166;padding:1px 6px;border-radius:10px;font-weight:700;}")
+                .append(".chip{display:inline-block;background:#1a2336;color:#e6edf7;border:1px solid #32415f;padding:2px 6px;border-radius:10px;margin:1px 4px 1px 0;}")
+                .append(".cov{display:inline-block;background:#1f6feb;color:#fff;padding:1px 8px;border-radius:10px;font-weight:700;}")
+                .append(".regex{display:block;background:#111927;color:#7ee787;border:1px solid #2f3f60;border-radius:6px;padding:6px;white-space:pre-wrap;word-break:break-all;margin:4px 0 6px 0;}")
+                .append(".path-card{border:1px solid #24324c;background:#10182a;border-radius:8px;padding:8px;margin:6px 0;}")
+                .append(".cand{color:#ffffff;white-space:pre;}")
+                .append("</style></head><body>");
+        sb.append("<div class='title'>Game #").append(fr.index).append("</div>");
+        sb.append("<div class='meta'>Answer: <span class='v'>").append(escapeHtml(fr.answer)).append("</span></div>");
+        sb.append("<div class='meta'>Attempts: ").append(fr.attempts).append("</div>");
+
+        int i = 1;
+        for (StepDetail step : fr.steps) {
+            sb.append("<div class='title'>Step ").append(i++).append("</div>");
+            sb.append("<div><span class='k'>Guess:</span> <span class='v'>").append(escapeHtml(step.guess)).append("</span></div>");
+            sb.append("<div><span class='k'>Result:</span> <span class='v'>").append(escapeHtml(step.result)).append("</span></div>");
+            if (step.strategy != null && !step.strategy.isEmpty()) {
+                sb.append("<div><span class='k'>Strategy:</span> ").append(escapeHtml(step.strategy)).append("</div>");
+            }
+            if (step.strategyReason != null && !step.strategyReason.isEmpty()) {
+                sb.append("<div><span class='k'>StrategyReason:</span> ").append(escapeHtml(step.strategyReason)).append("</div>");
+            }
+            if (step.filterRounds > 0 || step.checkedWords > 0) {
+                sb.append("<div><span class='n'>FilterRounds:</span> ").append(step.filterRounds)
+                        .append(", <span class='n'>CheckedWords:</span> ").append(step.checkedWords).append("</div>");
+            }
+            if (step.targetCoverage > 0) {
+                sb.append("<div><span class='n'>TargetCoverage:</span> ").append(step.targetCoverage).append("</div>");
+            }
+            if (!step.matchedWords.isEmpty()) {
+                sb.append("<div><span class='k'>MatchedWords:</span> ")
+                        .append(buildMatchedWordsHtml(step.matchedWords, 12)).append("</div>");
+            }
+            if (!step.filterPath.isEmpty()) {
+                sb.append("<div><span class='k'>FilterPath(n->2):</span></div>");
+                for (String pathLine : step.filterPath) {
+                    sb.append(buildFilterPathHtml(pathLine));
+                }
+            }
+            sb.append("<div><span class='k'>Top Candidates:</span></div>");
+            int j = 1;
+            for (CandidateScore cs : step.topCandidates) {
+                sb.append("<div class='cand'>")
+                        .append(String.format("%2d) ", j++))
+                        .append("<span class='word'>").append(escapeHtml(cs.word)).append("</span>")
+                        .append("  ")
+                        .append(cs.score)
+                        .append("</div>");
+            }
+        }
+        sb.append("</body></html>");
+        return sb.toString();
+    }
+
+    private static String escapeHtml(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
+    }
+
+    private static String buildMatchedWordsHtml(List<String> words, int maxDisplay) {
+        if (words == null || words.isEmpty()) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder();
+        int end = Math.min(maxDisplay, words.size());
+        for (int i = 0; i < end; i++) {
+            String entry = words.get(i);
+            String word = entry;
+            int idx = entry.indexOf('(');
+            if (idx > 0) {
+                word = entry.substring(0, idx);
+            }
+            sb.append("<span class='chip'><span class='word'>")
+                    .append(escapeHtml(word))
+                    .append("</span> ")
+                    .append(escapeHtml(entry.substring(Math.max(0, idx))))
+                    .append("</span>");
+        }
+        if (words.size() > end) {
+            sb.append("<span class='chip'>... +").append(words.size() - end).append("</span>");
+        }
+        return sb.toString();
+    }
+
+    private static String buildFilterPathHtml(String pathLine) {
+        String[] parts = pathLine.split(" \\| ");
+        String coverage = "";
+        String regex = "";
+        String regexMatched = "";
+        String accepted = "";
+        String excluded = "";
+        String rules = "";
+        String sample = "";
+        for (String part : parts) {
+            if (part.startsWith("coverage>=")) coverage = part;
+            else if (part.startsWith("regex=")) regex = part.substring("regex=".length());
+            else if (part.startsWith("regexMatched=")) regexMatched = part;
+            else if (part.startsWith("accepted=")) accepted = part;
+            else if (part.startsWith("excluded{")) excluded = part;
+            else if (part.startsWith("rules=")) rules = part;
+            else if (part.startsWith("sample{")) sample = part;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<div class='path-card'>");
+        sb.append("<div><span class='cov'>").append(escapeHtml(coverage)).append("</span> ");
+        if (!regexMatched.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(regexMatched)).append("</span>");
+        if (!accepted.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(accepted)).append("</span>");
+        if (!excluded.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(excluded)).append("</span>");
+        sb.append("</div>");
+        if (!regex.isEmpty()) {
+            sb.append("<div class='regex'>").append(escapeHtml(regex)).append("</div>");
+        }
+        if (!rules.isEmpty()) {
+            sb.append("<div class='muted'>").append(escapeHtml(rules)).append("</div>");
+        }
+        if (!sample.isEmpty()) {
+            sb.append("<div class='muted'>").append(escapeHtml(sample)).append("</div>");
+        }
+        sb.append("</div>");
+        return sb.toString();
+    }
+
+    private String formatFailureText(FailureRecord fr) {
         StringBuilder sb = new StringBuilder();
         sb.append("Game #").append(fr.index).append("\n");
         sb.append("Answer: ").append(fr.answer).append("\n");
@@ -588,6 +770,28 @@ public class WordleSimViewerApp extends Application {
             sb.append("Step ").append(i++).append("\n");
             sb.append("  Guess : ").append(step.guess).append("\n");
             sb.append("  Result: ").append(step.result).append("\n");
+            if (step.strategy != null && !step.strategy.isEmpty()) {
+                sb.append("  Strategy: ").append(step.strategy).append("\n");
+            }
+            if (step.strategyReason != null && !step.strategyReason.isEmpty()) {
+                sb.append("  StrategyReason: ").append(step.strategyReason).append("\n");
+            }
+            if (step.filterRounds > 0 || step.checkedWords > 0) {
+                sb.append("  FilterRounds: ").append(step.filterRounds)
+                        .append(", CheckedWords: ").append(step.checkedWords).append("\n");
+            }
+            if (step.targetCoverage > 0) {
+                sb.append("  TargetCoverage: ").append(step.targetCoverage).append("\n");
+            }
+            if (!step.matchedWords.isEmpty()) {
+                sb.append("  MatchedWords: ").append(formatWordList(step.matchedWords, 12)).append("\n");
+            }
+            if (!step.filterPath.isEmpty()) {
+                sb.append("  FilterPath(n->2):\n");
+                for (String pathLine : step.filterPath) {
+                    sb.append("    - ").append(pathLine).append("\n");
+                }
+            }
             sb.append("  Top Candidates:\n");
             int j = 1;
             for (CandidateScore cs : step.topCandidates) {
@@ -611,6 +815,12 @@ public class WordleSimViewerApp extends Application {
         scorer.setCharFrequencyWeight(params.charFrequencyWeight);
         scorer.setPositionTopBonus(params.positionTopBonus);
         scorer.setRepeatPenaltyBase(params.repeatPenaltyBase);
+    }
+
+    private static void applyScoreParams(WordleSolver solver, ScoreParams params) {
+        solver.setCharFrequencyWeight(params.charFrequencyWeight);
+        solver.setPositionTopBonus(params.positionTopBonus);
+        solver.setRepeatPenaltyBase(params.repeatPenaltyBase);
     }
 
     private static String buildReport(SimSummary summary) {
@@ -640,6 +850,18 @@ public class WordleSimViewerApp extends Application {
         params.positionTopBonus = parseInt(tfPositionTopBonus.getText(), DEFAULT_PARAMS.positionTopBonus);
         params.repeatPenaltyBase = parseInt(tfRepeatPenaltyBase.getText(), DEFAULT_PARAMS.repeatPenaltyBase);
         return params;
+    }
+
+    private static String formatWordList(List<String> words, int maxDisplay) {
+        if (words == null || words.isEmpty()) {
+            return "[]";
+        }
+        int end = Math.min(maxDisplay, words.size());
+        String base = String.join(", ", words.subList(0, end));
+        if (words.size() > end) {
+            return "[" + base + ", ... +" + (words.size() - end) + "]";
+        }
+        return "[" + base + "]";
     }
 
     // ====== Data models ======
@@ -692,6 +914,14 @@ public class WordleSimViewerApp extends Application {
         String guess;
         String result;
         List<CandidateScore> topCandidates = List.of();
+        String strategy = "";
+        String strategyReason = "";
+        int filterRounds;
+        int checkedWords;
+        int targetCoverage;
+        List<String> matchedWords = List.of();
+        List<String> familyCandidates = List.of();
+        List<String> filterPath = List.of();
     }
 
     static class SimResult {
@@ -707,6 +937,7 @@ public class WordleSimViewerApp extends Application {
         String answer;
         int attempts;
         String lastGuess;
+        String tag;
         List<StepDetail> steps;
 
         static FailureRecord from(SimResult r) {
@@ -716,6 +947,8 @@ public class WordleSimViewerApp extends Application {
             fr.attempts = r.attempts;
             fr.steps = r.steps;
             fr.lastGuess = (r.steps == null || r.steps.isEmpty()) ? "" : r.steps.get(r.steps.size() - 1).guess;
+            boolean hasProbe = r.steps != null && r.steps.stream().anyMatch(s -> "PROBE_SINGLE_SLOT".equals(s.strategy));
+            fr.tag = hasProbe ? "PROBE" : "-";
             return fr;
         }
     }

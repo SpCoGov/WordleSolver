@@ -16,11 +16,12 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     implementation "org.openjfx:javafx-controls:21.0.4"
+    implementation "org.openjfx:javafx-web:21.0.4"
 }
 
 javafx {
     version = '21.0.4'
-    modules = [ 'javafx.controls' ]
+    modules = [ 'javafx.controls', 'javafx.web' ]
 }
 
 application {
@@ -37,6 +38,6 @@ tasks.withType(JavaExec).configureEach {
 
     jvmArgs = [
             '--module-path', javafxLibs.join(File.pathSeparator),
-            '--add-modules', 'javafx.controls'
+            '--add-modules', 'javafx.controls,javafx.web'
     ]
 }
