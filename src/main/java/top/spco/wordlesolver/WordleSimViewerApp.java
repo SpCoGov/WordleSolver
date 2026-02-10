@@ -19,6 +19,8 @@ import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +40,7 @@ public class WordleSimViewerApp extends Application {
     private final TextField tfCharFrequencyWeight = new TextField(String.valueOf(DEFAULT_PARAMS.charFrequencyWeight));
     private final TextField tfPositionTopBonus = new TextField(String.valueOf(DEFAULT_PARAMS.positionTopBonus));
     private final TextField tfRepeatPenaltyBase = new TextField(String.valueOf(DEFAULT_PARAMS.repeatPenaltyBase));
+    private final CheckBox cbHardMode = new CheckBox("Hard Mode");
 
     private final Button btnRun = new Button("Run");
     private final Button btnStop = new Button("Stop");
@@ -52,12 +55,34 @@ public class WordleSimViewerApp extends Application {
     private Task<SimSummary> currentTask;
     private java.util.concurrent.ExecutorService currentExecutor;
 
+    private final TextField tfListTopK = new TextField("20");
+    private final TextField tfListMaxAttempts = new TextField("6");
+    private final TextField tfListWordLength = new TextField("5");
+    private final TextField tfListThreads = new TextField(String.valueOf(Math.max(1, Runtime.getRuntime().availableProcessors())));
+    private final TextField tfListAnswersPath = new TextField("/Users/spco/IdeaProjects/WordleSolver/src/main/resources/answers");
+    private final TextField tfListCharFrequencyWeight = new TextField(String.valueOf(DEFAULT_PARAMS.charFrequencyWeight));
+    private final TextField tfListPositionTopBonus = new TextField(String.valueOf(DEFAULT_PARAMS.positionTopBonus));
+    private final TextField tfListRepeatPenaltyBase = new TextField(String.valueOf(DEFAULT_PARAMS.repeatPenaltyBase));
+    private final CheckBox cbListHardMode = new CheckBox("Hard Mode");
+    private final Button btnRunList = new Button("Run");
+    private final Button btnStopList = new Button("Stop");
+    private final Button btnCopyListDetails = new Button("Copy Details");
+    private final ProgressBar progressBarList = new ProgressBar(0);
+    private final Label lbStatsList = new Label("Ready.");
+    private final TableView<GameRecord> tvAllGames = new TableView<>();
+    private final TextArea taListReport = new TextArea();
+    private final WebView wvListDetails = new WebView();
+    private String currentListDetailsText = "";
+    private Task<SimSummary> currentListTask;
+    private java.util.concurrent.ExecutorService currentListExecutor;
+
     @Override
     public void start(Stage stage) {
         TabPane tabPane = new TabPane();
         Tab simTab = new Tab("Simulation", createSimulationPane());
+        Tab listSimTab = new Tab("List Simulation", createListSimulationPane());
         Tab manualTab = new Tab("手动猜词", createManualGuessPane());
-        tabPane.getTabs().addAll(simTab, manualTab);
+        tabPane.getTabs().addAll(simTab, listSimTab, manualTab);
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         Scene scene = new Scene(tabPane, 1200, 720);
@@ -77,6 +102,7 @@ public class WordleSimViewerApp extends Application {
         controls.addRow(r++, new Label("Threads"), tfThreads, new Label("Answers File"), tfAnswersPath);
         controls.addRow(r++, new Label("CharWeight"), tfCharFrequencyWeight, new Label("PosBonus"), tfPositionTopBonus);
         controls.addRow(r++, new Label("RepeatBase"), tfRepeatPenaltyBase);
+        controls.addRow(r++, cbHardMode);
 
         HBox runBar = new HBox(10, btnRun, btnStop, progressBar, lbStats);
         runBar.setPadding(new Insets(8, 0, 0, 0));
@@ -116,6 +142,59 @@ public class WordleSimViewerApp extends Application {
         btnRun.setOnAction(e -> runSimulations());
         btnStop.setOnAction(e -> stopSimulations());
         btnStop.setDisable(true);
+
+        return splitPane;
+    }
+
+    private SplitPane createListSimulationPane() {
+        GridPane controls = new GridPane();
+        controls.setHgap(10);
+        controls.setVgap(8);
+
+        int r = 0;
+        controls.addRow(r++, new Label("Mode"), new Label("Simulate Every Answer"), new Label("TopK"), tfListTopK);
+        controls.addRow(r++, new Label("Max Attempts"), tfListMaxAttempts, new Label("Word Length"), tfListWordLength);
+        controls.addRow(r++, new Label("Threads"), tfListThreads, new Label("Answers File"), tfListAnswersPath);
+        controls.addRow(r++, new Label("CharWeight"), tfListCharFrequencyWeight, new Label("PosBonus"), tfListPositionTopBonus);
+        controls.addRow(r++, new Label("RepeatBase"), tfListRepeatPenaltyBase);
+        controls.addRow(r++, cbListHardMode);
+
+        HBox runBar = new HBox(10, btnRunList, btnStopList, progressBarList, lbStatsList);
+        runBar.setPadding(new Insets(8, 0, 0, 0));
+        HBox.setHgrow(progressBarList, Priority.ALWAYS);
+        progressBarList.setMaxWidth(Double.MAX_VALUE);
+
+        VBox leftTop = new VBox(10, controls, runBar);
+        leftTop.setPadding(new Insets(12));
+
+        setupAllGamesTable();
+        VBox left = new VBox(10, leftTop, new Label("All Games"), tvAllGames);
+        VBox.setVgrow(tvAllGames, Priority.ALWAYS);
+
+        taListReport.setEditable(false);
+        taListReport.setWrapText(false);
+
+        wvListDetails.setContextMenuEnabled(true);
+        setListDetailsPlaceholder("Select a game to see details.");
+        btnCopyListDetails.setOnAction(e -> copyListDetailsToClipboard());
+
+        VBox right = new VBox(
+                10,
+                new Label("Report"),
+                taListReport,
+                new HBox(8, new Label("Game Details"), btnCopyListDetails),
+                wvListDetails
+        );
+        right.setPadding(new Insets(12));
+        VBox.setVgrow(taListReport, Priority.NEVER);
+        VBox.setVgrow(wvListDetails, Priority.ALWAYS);
+
+        SplitPane splitPane = new SplitPane(left, right);
+        splitPane.setDividerPositions(0.55);
+
+        btnRunList.setOnAction(e -> runListSimulations());
+        btnStopList.setOnAction(e -> stopListSimulations());
+        btnStopList.setDisable(true);
 
         return splitPane;
     }
@@ -352,12 +431,53 @@ public class WordleSimViewerApp extends Application {
         });
     }
 
+    private void setupAllGamesTable() {
+        TableColumn<GameRecord, Number> colIndex = new TableColumn<>("#");
+        colIndex.setCellValueFactory(c -> new SimpleIntegerProperty(c.getValue().index));
+
+        TableColumn<GameRecord, String> colAnswer = new TableColumn<>("Answer");
+        colAnswer.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().answer));
+
+        TableColumn<GameRecord, String> colOutcome = new TableColumn<>("Outcome");
+        colOutcome.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().win ? "WIN" : "FAIL"));
+
+        TableColumn<GameRecord, Number> colAttempts = new TableColumn<>("Attempts");
+        colAttempts.setCellValueFactory(c -> new SimpleIntegerProperty(c.getValue().attempts));
+
+        TableColumn<GameRecord, String> colLastGuess = new TableColumn<>("Last Guess");
+        colLastGuess.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().lastGuess));
+
+        TableColumn<GameRecord, String> colTag = new TableColumn<>("Tag");
+        colTag.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().tag));
+
+        tvAllGames.getColumns().add(colIndex);
+        tvAllGames.getColumns().add(colAnswer);
+        tvAllGames.getColumns().add(colOutcome);
+        tvAllGames.getColumns().add(colAttempts);
+        tvAllGames.getColumns().add(colLastGuess);
+        tvAllGames.getColumns().add(colTag);
+        tvAllGames.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+        colIndex.setSortType(TableColumn.SortType.ASCENDING);
+        tvAllGames.getSortOrder().clear();
+        tvAllGames.getSortOrder().add(colIndex);
+
+        tvAllGames.getSelectionModel().selectedItemProperty().addListener((obs, old, selected) -> {
+            if (selected == null) {
+                setListDetailsPlaceholder("Select a game to see details.");
+                return;
+            }
+            currentListDetailsText = formatSimResultText(selected.toSimResult());
+            renderListGameRich(selected.toSimResult());
+        });
+    }
+
     private void runSimulations() {
         int testTimes = parseInt(tfTestTimes.getText(), 1000);
         int topK = parseInt(tfTopK.getText(), 20);
         int maxAttempts = parseInt(tfMaxAttempts.getText(), 6);
         int length = parseInt(tfWordLength.getText(), 5);
         int threads = Math.max(1, parseInt(tfThreads.getText(), Runtime.getRuntime().availableProcessors()));
+        boolean hardMode = cbHardMode.isSelected();
         File answersFile = new File(tfAnswersPath.getText().trim());
 
         btnRun.setDisable(true);
@@ -387,7 +507,7 @@ public class WordleSimViewerApp extends Application {
 
                 for (int i = 0; i < testTimes; i++) {
                     final int index = i;
-                    completion.submit(() -> runSingleGame(index, maxAttempts, length, answersFile, topK, scoreParams));
+                    completion.submit(() -> runSingleGame(index, maxAttempts, length, answersFile, topK, scoreParams, hardMode));
                 }
 
                 try {
@@ -432,6 +552,7 @@ public class WordleSimViewerApp extends Application {
                 summary.totalSeconds = (end - start) / 1000.0;
                 summary.scoreParams = scoreParams;
                 summary.threads = threads;
+                summary.hardMode = hardMode;
                 summary.cancelled = isCancelled();
                 return summary;
             }
@@ -481,6 +602,7 @@ public class WordleSimViewerApp extends Application {
                 summary.totalSeconds = 0;
                 summary.scoreParams = readScoreParams();
                 summary.threads = Math.max(1, parseInt(tfThreads.getText(), Runtime.getRuntime().availableProcessors()));
+                summary.hardMode = cbHardMode.isSelected();
                 summary.cancelled = true;
             }
             lbStats.setText("Cancelled.");
@@ -494,6 +616,161 @@ public class WordleSimViewerApp extends Application {
         t.start();
     }
 
+    private void runListSimulations() {
+        int topK = parseInt(tfListTopK.getText(), 20);
+        int maxAttempts = parseInt(tfListMaxAttempts.getText(), 6);
+        int length = parseInt(tfListWordLength.getText(), 5);
+        int threads = Math.max(1, parseInt(tfListThreads.getText(), Runtime.getRuntime().availableProcessors()));
+        boolean hardMode = cbListHardMode.isSelected();
+        File answersFile = new File(tfListAnswersPath.getText().trim());
+        List<String> answers;
+        try {
+            answers = loadAnswersInOrder(answersFile, length);
+        } catch (RuntimeException ex) {
+            setListDetailsPlaceholder("Failed to load answers: " + ex.getMessage());
+            lbStatsList.setText("Failed to load answers.");
+            return;
+        }
+        if (answers.isEmpty()) {
+            setListDetailsPlaceholder("No answers with the requested word length.");
+            lbStatsList.setText("No answers.");
+            return;
+        }
+
+        btnRunList.setDisable(true);
+        btnStopList.setDisable(false);
+
+        var allGamesList = FXCollections.<GameRecord>observableArrayList();
+        tvAllGames.setItems(allGamesList);
+
+        setListDetailsPlaceholder("Running...");
+        taListReport.clear();
+        lbStatsList.setText("Running...");
+        progressBarList.setProgress(0);
+
+        Task<SimSummary> task = new Task<>() {
+            @Override
+            protected SimSummary call() {
+                long start = System.currentTimeMillis();
+
+                ScoreParams scoreParams = readListScoreParams();
+                int wins = 0;
+                int completed = 0;
+                long attemptsSum = 0;
+                int total = answers.size();
+
+                var executor = java.util.concurrent.Executors.newFixedThreadPool(threads);
+                currentListExecutor = executor;
+                var completion = new java.util.concurrent.ExecutorCompletionService<SimResult>(executor);
+
+                for (int i = 0; i < total; i++) {
+                    final int index = i;
+                    final String answer = answers.get(i);
+                    completion.submit(() -> runSingleGame(index, answer, maxAttempts, length, answersFile, topK, scoreParams, hardMode));
+                }
+
+                try {
+                    for (int i = 0; i < total; i++) {
+                        if (isCancelled()) {
+                            break;
+                        }
+                        SimResult result = completion.take().get();
+                        completed++;
+                        attemptsSum += result.attempts;
+                        if (result.win) {
+                            wins++;
+                        }
+                        GameRecord record = GameRecord.from(result);
+                        Platform.runLater(() -> allGamesList.add(record));
+                        if (i % 5 == 0) {
+                            updateProgress(i + 1, total);
+                            updateMessage(buildStats(completed, wins, completed - wins, attemptsSum));
+                        }
+                    }
+                } catch (Exception ex) {
+                    if (!isCancelled()) {
+                        throw new RuntimeException(ex);
+                    }
+                } finally {
+                    executor.shutdownNow();
+                }
+
+                long end = System.currentTimeMillis();
+
+                SimSummary summary = new SimSummary();
+                summary.testTimes = total;
+                summary.completed = completed;
+                summary.wins = wins;
+                summary.avgAttempts = completed == 0 ? 0 : (attemptsSum * 1.0 / completed);
+                summary.totalSeconds = (end - start) / 1000.0;
+                summary.scoreParams = scoreParams;
+                summary.threads = threads;
+                summary.hardMode = hardMode;
+                summary.cancelled = isCancelled();
+                return summary;
+            }
+        };
+        currentListTask = task;
+
+        progressBarList.progressProperty().bind(task.progressProperty());
+        lbStatsList.textProperty().bind(task.messageProperty());
+
+        task.setOnSucceeded(e -> {
+            progressBarList.progressProperty().unbind();
+            lbStatsList.textProperty().unbind();
+
+            SimSummary summary = task.getValue();
+            int failures = summary.completed - summary.wins;
+            lbStatsList.setText(String.format(
+                    "Done. Time=%.2fs, Completed=%d, Wins=%d, WinRate=%.2f%%, AvgAttempts=%.3f, Failures=%d",
+                    summary.totalSeconds,
+                    summary.completed,
+                    summary.wins,
+                    summary.completed == 0 ? 0 : (summary.wins * 100.0 / summary.completed),
+                    summary.avgAttempts,
+                    failures
+            ));
+            taListReport.setText(buildReport(summary));
+            btnRunList.setDisable(false);
+            btnStopList.setDisable(true);
+        });
+
+        task.setOnFailed(e -> {
+            progressBarList.progressProperty().unbind();
+            lbStatsList.textProperty().unbind();
+            Throwable ex = task.getException();
+            lbStatsList.setText("Failed: " + (ex == null ? "unknown error" : ex.getMessage()));
+            taListReport.setText("Failed: " + (ex == null ? "unknown error" : ex.getMessage()));
+            btnRunList.setDisable(false);
+            btnStopList.setDisable(true);
+        });
+
+        task.setOnCancelled(e -> {
+            progressBarList.progressProperty().unbind();
+            lbStatsList.textProperty().unbind();
+            SimSummary summary = task.getValue();
+            if (summary == null) {
+                summary = new SimSummary();
+                summary.completed = 0;
+                summary.wins = 0;
+                summary.avgAttempts = 0;
+                summary.totalSeconds = 0;
+                summary.scoreParams = readListScoreParams();
+                summary.threads = Math.max(1, parseInt(tfListThreads.getText(), Runtime.getRuntime().availableProcessors()));
+                summary.hardMode = cbListHardMode.isSelected();
+                summary.cancelled = true;
+            }
+            lbStatsList.setText("Cancelled.");
+            taListReport.setText(buildReport(summary));
+            btnRunList.setDisable(false);
+            btnStopList.setDisable(true);
+        });
+
+        Thread t = new Thread(task, "wordle-list-sim-task");
+        t.setDaemon(true);
+        t.start();
+    }
+
     private void stopSimulations() {
         if (currentTask != null) {
             currentTask.cancel();
@@ -502,6 +779,16 @@ public class WordleSimViewerApp extends Application {
             currentExecutor.shutdownNow();
         }
         btnStop.setDisable(true);
+    }
+
+    private void stopListSimulations() {
+        if (currentListTask != null) {
+            currentListTask.cancel();
+        }
+        if (currentListExecutor != null) {
+            currentListExecutor.shutdownNow();
+        }
+        btnStopList.setDisable(true);
     }
 
     private static String buildStats(int completed, int wins, int failures, long attemptsSum) {
@@ -519,11 +806,18 @@ public class WordleSimViewerApp extends Application {
         }
     }
 
-    private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK, ScoreParams scoreParams) {
-        Wordle wordle = Wordle.start(maxAttempts, length, answersFile);
+    private SimResult runSingleGame(int index, int maxAttempts, int length, File answersFile, int topK, ScoreParams scoreParams, boolean hardMode) {
+        return runSingleGame(index, null, maxAttempts, length, answersFile, topK, scoreParams, hardMode);
+    }
+
+    private SimResult runSingleGame(int index, String fixedAnswer, int maxAttempts, int length, File answersFile, int topK, ScoreParams scoreParams, boolean hardMode) {
+        Wordle wordle = fixedAnswer == null
+                ? Wordle.start(maxAttempts, length, answersFile)
+                : Wordle.start(maxAttempts, fixedAnswer);
 
         WordleSolver solver = new WordleSolver(answersFile);
         solver.setMaxGuessTime(maxAttempts);
+        solver.setHardMode(hardMode);
         applyScoreParams(solver, scoreParams);
 
         List<StepDetail> steps = new ArrayList<>();
@@ -602,6 +896,25 @@ public class WordleSimViewerApp extends Application {
         return r;
     }
 
+    private static List<String> loadAnswersInOrder(File answersFile, int length) {
+        try {
+            List<String> lines = Files.readAllLines(answersFile.toPath());
+            List<String> answers = new ArrayList<>();
+            for (String line : lines) {
+                if (line == null) {
+                    continue;
+                }
+                String word = line.trim().toUpperCase();
+                if (word.length() == length) {
+                    answers.add(word);
+                }
+            }
+            return answers;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read answers file: " + answersFile.getAbsolutePath(), e);
+        }
+    }
+
     private void setDetailsPlaceholder(String message) {
         wvDetails.getEngine().loadContent(
                 "<html><body style='margin:0;padding:10px;background:#0b1220;color:#9aa4b2;"
@@ -612,6 +925,16 @@ public class WordleSimViewerApp extends Application {
         currentFailureDetailsText = message;
     }
 
+    private void setListDetailsPlaceholder(String message) {
+        wvListDetails.getEngine().loadContent(
+                "<html><body style='margin:0;padding:10px;background:#0b1220;color:#9aa4b2;"
+                        + "font-family:Menlo,Consolas,monospace;font-size:12px;'>"
+                        + escapeHtml(message)
+                        + "</body></html>"
+        );
+        currentListDetailsText = message;
+    }
+
     private void renderFailureRich(FailureRecord fr) {
         wvDetails.getEngine().loadContent(formatFailureHtml(fr));
     }
@@ -619,6 +942,12 @@ public class WordleSimViewerApp extends Application {
     private void copyDetailsToClipboard() {
         ClipboardContent content = new ClipboardContent();
         content.putString(currentFailureDetailsText == null ? "" : currentFailureDetailsText);
+        Clipboard.getSystemClipboard().setContent(content);
+    }
+
+    private void copyListDetailsToClipboard() {
+        ClipboardContent content = new ClipboardContent();
+        content.putString(currentListDetailsText == null ? "" : currentListDetailsText);
         Clipboard.getSystemClipboard().setContent(content);
     }
 
@@ -635,6 +964,10 @@ public class WordleSimViewerApp extends Application {
                 .append(".word{background:#233047;color:#ffd166;padding:1px 6px;border-radius:10px;font-weight:700;}")
                 .append(".chip{display:inline-block;background:#1a2336;color:#e6edf7;border:1px solid #32415f;padding:2px 6px;border-radius:10px;margin:1px 4px 1px 0;}")
                 .append(".cov{display:inline-block;background:#1f6feb;color:#fff;padding:1px 8px;border-radius:10px;font-weight:700;}")
+                .append(".res{display:inline-block;min-width:18px;text-align:center;padding:2px 6px;margin-right:4px;border-radius:6px;font-weight:700;}")
+                .append(".res-g{background:#2ea043;color:#ffffff;}")
+                .append(".res-y{background:#d29922;color:#101010;}")
+                .append(".res-b{background:#4b5563;color:#f8fafc;}")
                 .append(".regex{display:block;background:#111927;color:#7ee787;border:1px solid #2f3f60;border-radius:6px;padding:6px;white-space:pre-wrap;word-break:break-all;margin:4px 0 6px 0;}")
                 .append(".path-card{border:1px solid #24324c;background:#10182a;border-radius:8px;padding:8px;margin:6px 0;}")
                 .append(".cand{color:#ffffff;white-space:pre;}")
@@ -642,12 +975,20 @@ public class WordleSimViewerApp extends Application {
         sb.append("<div class='title'>Game #").append(fr.index).append("</div>");
         sb.append("<div class='meta'>Answer: <span class='v'>").append(escapeHtml(fr.answer)).append("</span></div>");
         sb.append("<div class='meta'>Attempts: ").append(fr.attempts).append("</div>");
+        sb.append("<div class='title'>Game Board</div>");
+        int boardStep = 1;
+        for (StepDetail step : fr.steps) {
+            sb.append("<div><span class='k'>#").append(boardStep++).append("</span> ");
+            sb.append("<span class='word'>").append(escapeHtml(step.guess)).append("</span> ");
+            sb.append(buildResultHtml(step.result));
+            sb.append("</div>");
+        }
 
         int i = 1;
         for (StepDetail step : fr.steps) {
             sb.append("<div class='title'>Step ").append(i++).append("</div>");
             sb.append("<div><span class='k'>Guess:</span> <span class='v'>").append(escapeHtml(step.guess)).append("</span></div>");
-            sb.append("<div><span class='k'>Result:</span> <span class='v'>").append(escapeHtml(step.result)).append("</span></div>");
+            sb.append("<div><span class='k'>Result:</span> ").append(buildResultHtml(step.result)).append("</div>");
             if (step.strategy != null && !step.strategy.isEmpty()) {
                 sb.append("<div><span class='k'>Strategy:</span> ").append(escapeHtml(step.strategy)).append("</div>");
             }
@@ -686,6 +1027,14 @@ public class WordleSimViewerApp extends Application {
         return sb.toString();
     }
 
+    private void renderListGameRich(SimResult result) {
+        wvListDetails.getEngine().loadContent(formatSimResultHtml(result));
+    }
+
+    private String formatSimResultHtml(SimResult result) {
+        return formatFailureHtml(FailureRecord.from(result));
+    }
+
     private static String escapeHtml(String text) {
         if (text == null) {
             return "";
@@ -718,6 +1067,52 @@ public class WordleSimViewerApp extends Application {
             sb.append("<span class='chip'>... +").append(words.size() - end).append("</span>");
         }
         return sb.toString();
+    }
+
+    private static String buildResultHtml(String result) {
+        if (result == null) {
+            return "<span class='v'></span>";
+        }
+        if ("GAME OVER".equals(result) || "NO CANDIDATES".equals(result)) {
+            return "<span class='v'>" + escapeHtml(result) + "</span>";
+        }
+        List<ResultCell> cells = parseResultCells(result);
+        if (cells.isEmpty()) {
+            return "<span class='v'>" + escapeHtml(result) + "</span>";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ResultCell cell : cells) {
+            sb.append("<span class='res res-").append(cell.colorCode).append("'>")
+                    .append(escapeHtml(String.valueOf(cell.letter)))
+                    .append("</span>");
+        }
+        return sb.toString();
+    }
+
+    private static List<ResultCell> parseResultCells(String result) {
+        List<ResultCell> cells = new ArrayList<>();
+        char currentColor = 0;
+        for (int i = 0; i < result.length(); i++) {
+            char c = result.charAt(i);
+            if (c == 'g' || c == 'y' || c == 'b') {
+                currentColor = c;
+                continue;
+            }
+            if (Character.isLetter(c) && Character.isUpperCase(c) && currentColor != 0) {
+                cells.add(new ResultCell(c, currentColor));
+            }
+        }
+        return cells;
+    }
+
+    private static class ResultCell {
+        final char letter;
+        final char colorCode;
+
+        ResultCell(char letter, char colorCode) {
+            this.letter = letter;
+            this.colorCode = colorCode;
+        }
     }
 
     private static String buildFilterPathHtml(String pathLine) {
@@ -765,6 +1160,13 @@ public class WordleSimViewerApp extends Application {
         sb.append("Game #").append(fr.index).append("\n");
         sb.append("Answer: ").append(fr.answer).append("\n");
         sb.append("Attempts: ").append(fr.attempts).append("\n\n");
+        sb.append("Game Board\n");
+        int boardStep = 1;
+        for (StepDetail step : fr.steps) {
+            sb.append("  #").append(boardStep++).append(" ")
+                    .append(step.guess).append(" -> ").append(step.result).append("\n");
+        }
+        sb.append("\n");
 
         int i = 1;
         for (StepDetail step : fr.steps) {
@@ -803,6 +1205,10 @@ public class WordleSimViewerApp extends Application {
         return sb.toString();
     }
 
+    private String formatSimResultText(SimResult result) {
+        return formatFailureText(FailureRecord.from(result));
+    }
+
     private static ScoreParams defaultScoreParams() {
         WordleScorer scorer = new WordleScorer();
         ScoreParams params = new ScoreParams();
@@ -835,6 +1241,7 @@ public class WordleSimViewerApp extends Application {
         sb.append(String.format("AvgAttempts: %.3f%n", summary.avgAttempts));
         sb.append(String.format("Time: %.2fs%n", summary.totalSeconds));
         sb.append(String.format("Threads: %d%n", summary.threads));
+        sb.append(String.format("HardMode: %s%n", summary.hardMode));
         sb.append(String.format("Cancelled: %s%n", summary.cancelled));
         if (summary.scoreParams != null) {
             sb.append("\nScore Params\n");
@@ -850,6 +1257,14 @@ public class WordleSimViewerApp extends Application {
         params.charFrequencyWeight = parseInt(tfCharFrequencyWeight.getText(), DEFAULT_PARAMS.charFrequencyWeight);
         params.positionTopBonus = parseInt(tfPositionTopBonus.getText(), DEFAULT_PARAMS.positionTopBonus);
         params.repeatPenaltyBase = parseInt(tfRepeatPenaltyBase.getText(), DEFAULT_PARAMS.repeatPenaltyBase);
+        return params;
+    }
+
+    private ScoreParams readListScoreParams() {
+        ScoreParams params = new ScoreParams();
+        params.charFrequencyWeight = parseInt(tfListCharFrequencyWeight.getText(), DEFAULT_PARAMS.charFrequencyWeight);
+        params.positionTopBonus = parseInt(tfListPositionTopBonus.getText(), DEFAULT_PARAMS.positionTopBonus);
+        params.repeatPenaltyBase = parseInt(tfListRepeatPenaltyBase.getText(), DEFAULT_PARAMS.repeatPenaltyBase);
         return params;
     }
 
@@ -933,6 +1348,39 @@ public class WordleSimViewerApp extends Application {
         List<StepDetail> steps;
     }
 
+    static class GameRecord {
+        int index;
+        String answer;
+        boolean win;
+        int attempts;
+        String lastGuess;
+        String tag;
+        List<StepDetail> steps;
+
+        static GameRecord from(SimResult r) {
+            GameRecord gr = new GameRecord();
+            gr.index = r.index;
+            gr.answer = r.answer;
+            gr.win = r.win;
+            gr.attempts = r.attempts;
+            gr.steps = r.steps;
+            gr.lastGuess = (r.steps == null || r.steps.isEmpty()) ? "" : r.steps.get(r.steps.size() - 1).guess;
+            boolean hasProbe = r.steps != null && r.steps.stream().anyMatch(s -> "PROBE_SINGLE_SLOT".equals(s.strategy));
+            gr.tag = hasProbe ? "PROBE" : "-";
+            return gr;
+        }
+
+        SimResult toSimResult() {
+            SimResult r = new SimResult();
+            r.index = index;
+            r.answer = answer;
+            r.win = win;
+            r.attempts = attempts;
+            r.steps = steps;
+            return r;
+        }
+    }
+
     static class FailureRecord {
         int index;
         String answer;
@@ -963,6 +1411,7 @@ public class WordleSimViewerApp extends Application {
         List<FailureRecord> failures = List.of();
         ScoreParams scoreParams;
         int threads;
+        boolean hardMode;
         boolean cancelled;
     }
 
