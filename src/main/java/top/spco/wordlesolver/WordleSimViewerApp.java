@@ -742,7 +742,8 @@ public class WordleSimViewerApp extends Application {
         StringBuilder sb = new StringBuilder();
         sb.append("<div class='path-card'>");
         sb.append("<div><span class='cov'>").append(escapeHtml(coverage)).append("</span> ");
-        if (!regexMatched.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(regexMatched)).append("</span>");
+        if (!regexMatched.isEmpty())
+            sb.append("<span class='chip'>").append(escapeHtml(regexMatched)).append("</span>");
         if (!accepted.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(accepted)).append("</span>");
         if (!excluded.isEmpty()) sb.append("<span class='chip'>").append(escapeHtml(excluded)).append("</span>");
         sb.append("</div>");

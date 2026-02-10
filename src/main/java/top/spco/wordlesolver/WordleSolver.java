@@ -1,12 +1,7 @@
 package top.spco.wordlesolver;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 
 public class WordleSolver {
@@ -126,10 +121,12 @@ public class WordleSolver {
                 return null;
             }
             String chosen = rankedSmallSet.getFirst();
-            lastDecision = GuessDecision.candidate(chosen, toSortedUpperWords(candidates), "CANDIDATES_LE_2");
+            lastDecision = GuessDecision.candidate(chosen, toSortedUpperWords(candidates), "CANDIDATES_LE_2",
+                    0, 0, 0, List.of(), List.of());
             return chosen;
         }
         String fallbackReason = "PROBE_SKIPPED";
+        ProbeSelection fallbackProbeSelection = null;
         if (hardMode) {
             fallbackReason = "HARD_MODE";
         } else if (getRemainingAttempts() < 2) {
@@ -140,7 +137,7 @@ public class WordleSolver {
             SingleSlotFamily family = detectSingleSlotFamily(candidates);
             if (family != null) {
                 ProbeSelection selection = chooseProbeGuessByCoverage(family);
-                if (selection != null) {
+                if (selection != null && selection.guess != null) {
                     lastDecision = GuessDecision.probe(
                             selection.guess,
                             selection.filterRounds,
@@ -154,6 +151,7 @@ public class WordleSolver {
                     );
                     return selection.guess;
                 }
+                fallbackProbeSelection = selection;
                 fallbackReason = "NO_PROBE_MATCH_AFTER_RULES";
             } else {
                 fallbackReason = "NOT_SINGLE_SLOT_FAMILY";
@@ -165,7 +163,21 @@ public class WordleSolver {
             return null;
         }
         String chosen = ranked.getFirst();
-        lastDecision = GuessDecision.candidate(chosen, toSortedUpperWords(candidates), fallbackReason);
+        int filterRounds = fallbackProbeSelection == null ? 0 : fallbackProbeSelection.filterRounds;
+        int checkedWords = fallbackProbeSelection == null ? 0 : fallbackProbeSelection.checkedWords;
+        int targetCoverage = fallbackProbeSelection == null ? 0 : fallbackProbeSelection.targetCoverage;
+        List<String> matchedWords = fallbackProbeSelection == null ? List.of() : fallbackProbeSelection.matchedWords;
+        List<String> filterPath = fallbackProbeSelection == null ? List.of() : fallbackProbeSelection.filterPath;
+        lastDecision = GuessDecision.candidate(
+                chosen,
+                toSortedUpperWords(candidates),
+                fallbackReason,
+                filterRounds,
+                checkedWords,
+                targetCoverage,
+                matchedWords,
+                filterPath
+        );
         return chosen;
     }
 
@@ -225,7 +237,7 @@ public class WordleSolver {
                 checkedWords++;
                 if (pattern.matcher(word).matches()) {
                     regexMatchedCount++;
-                    List<Character> newProbeLetters = collectNewProbeLetters(word, letters);
+                    List<Character> newProbeLetters = collectNewProbeLetters(word, family.requiredProbeOccurrences);
                     if (newProbeLetters.size() <= 1) {
                         excludedByNewProbeRule++;
                         if (excludedProbeSample.size() < 6) {
@@ -246,7 +258,8 @@ public class WordleSolver {
             filterPath.add(String.format(
                     "coverage>=%d | regex=%s | regexMatched=%d | accepted=%d | " +
                             "excluded{family=%d, guessed=%d, newProbe<=1=%d} | " +
-                            "rules=[exclude family candidates; exclude guessed words; exclude newProbeLetters<=1] | " +
+                            "rules=[exclude family candidates; exclude guessed words; " +
+                            "newProbeLetters use required occurrences(baseFixedCount+1); exclude newProbeLetters<=1] | " +
                             "sample{accepted=%s, family=%s, guessed=%s, newProbe<=1=%s}",
                     targetCoverage,
                     coverageRegex,
@@ -272,17 +285,27 @@ public class WordleSolver {
                 );
             }
         }
-        return null;
+        return new ProbeSelection(
+                null,
+                filterRounds,
+                checkedWords,
+                minCoverage,
+                List.of(),
+                filterPath,
+                List.of()
+        );
     }
 
-    private List<Character> collectNewProbeLetters(String word, List<Character> targetLetters) {
-        HashSet<Character> inWord = new HashSet<>();
+    private List<Character> collectNewProbeLetters(String word, Map<Character, Integer> requiredProbeOccurrences) {
+        HashMap<Character, Integer> inWord = new HashMap<>();
         for (char c : word.toUpperCase().toCharArray()) {
-            inWord.add(c);
+            inWord.put(c, inWord.getOrDefault(c, 0) + 1);
         }
         List<Character> newLetters = new ArrayList<>();
-        for (char c : targetLetters) {
-            if (inWord.contains(c) && !probedLetters.contains(c)) {
+        for (Map.Entry<Character, Integer> entry : requiredProbeOccurrences.entrySet()) {
+            char c = entry.getKey();
+            int required = entry.getValue();
+            if (inWord.getOrDefault(c, 0) >= required && !probedLetters.contains(c)) {
                 newLetters.add(c);
             }
         }
@@ -360,10 +383,29 @@ public class WordleSolver {
         if (variableLetters.size() < 2) {
             return null;
         }
-        return new SingleSlotFamily(variableIndex, variableLetters, candidates);
+        HashMap<Character, Integer> fixedCounts = new HashMap<>();
+        for (int i = 0; i < length; i++) {
+            if (i == variableIndex) {
+                continue;
+            }
+            char c = Character.toUpperCase(first.charAt(i));
+            fixedCounts.put(c, fixedCounts.getOrDefault(c, 0) + 1);
+        }
+
+        HashMap<Character, Integer> requiredProbeOccurrences = new HashMap<>();
+        for (char c : variableLetters) {
+            requiredProbeOccurrences.put(c, fixedCounts.getOrDefault(c, 0) + 1);
+        }
+
+        return new SingleSlotFamily(variableIndex, variableLetters, requiredProbeOccurrences, candidates);
     }
 
-    private record SingleSlotFamily(int variableIndex, Set<Character> variableLetters, Set<String> candidates) {
+    private record SingleSlotFamily(
+            int variableIndex,
+            Set<Character> variableLetters,
+            Map<Character, Integer> requiredProbeOccurrences,
+            Set<String> candidates
+    ) {
     }
 
     private static List<String> toSortedUpperWords(Set<String> words) {
@@ -422,7 +464,24 @@ public class WordleSolver {
         }
 
         static GuessDecision candidate(String chosenWord, List<String> candidates, String reason) {
-            return new GuessDecision("CANDIDATE_RANK", reason, chosenWord.toUpperCase(), 0, 0, 0, List.of(), candidates, List.of(), List.of());
+            return candidate(chosenWord, candidates, reason, 0, 0, 0, List.of(), List.of());
+        }
+
+        static GuessDecision candidate(String chosenWord, List<String> candidates, String reason,
+                                       int filterRounds, int checkedWords, int targetCoverage,
+                                       List<String> matchedWords, List<String> filterPath) {
+            return new GuessDecision(
+                    "CANDIDATE_RANK",
+                    reason,
+                    chosenWord.toUpperCase(),
+                    filterRounds,
+                    checkedWords,
+                    targetCoverage,
+                    matchedWords,
+                    candidates,
+                    filterPath,
+                    List.of()
+            );
         }
 
         static GuessDecision probe(String chosenWord, int filterRounds, int checkedWords, int targetCoverage,

@@ -1,6 +1,9 @@
 package top.spco.wordlesolver;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -56,8 +59,7 @@ public class WordleConstraint {
     }
 
 
-
-    public String toRegex() {   
+    public String toRegex() {
         if (hasWords.isEmpty() && minCharCounts.isEmpty() && maxCharCounts.isEmpty() && mustBe.isEmpty() && cannotBe.isEmpty()) {
             return "^[A-Z]{" + length + "}$";
         }

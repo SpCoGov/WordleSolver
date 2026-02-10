@@ -157,7 +157,7 @@ public class Wordle {
             WordleConstraint solver = new WordleConstraint();
             solver.setWordList(answers);
             WordleScorer scorer = new WordleScorer();
-            LinkedHashMap<String,String> attemptResultMap = new LinkedHashMap<>();
+            LinkedHashMap<String, String> attemptResultMap = new LinkedHashMap<>();
             try {
                 do {
                     List<String> ranked = scorer.rankCandidates(solver);
