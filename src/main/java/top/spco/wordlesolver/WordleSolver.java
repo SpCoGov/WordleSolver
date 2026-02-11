@@ -195,9 +195,7 @@ public class WordleSolver {
             return null;
         }
         List<String> rankedPool = scorer.rankCandidates(allWordsCache, constraint.getLength());
-        if (rankedPool.size() > entropyMaxGuesses) {
-            rankedPool = rankedPool.subList(0, entropyMaxGuesses);
-        }
+        int rankedPoolSize = rankedPool.size();
         int minCoverage = Math.max(2, minProbeDistinctDiscriminativeLetters);
         int checkedWords = 0;
         int filterRounds = 0;
@@ -216,6 +214,7 @@ public class WordleSolver {
             int regexMatchedCount = 0;
             int excludedByNewProbeRule = 0;
             int acceptedCount = 0;
+            List<String> regexMatchedSample = new ArrayList<>();
             List<String> excludedFamilySample = new ArrayList<>();
             List<String> excludedGuessedSample = new ArrayList<>();
             List<String> excludedProbeSample = new ArrayList<>();
@@ -237,6 +236,9 @@ public class WordleSolver {
                 checkedWords++;
                 if (pattern.matcher(word).matches()) {
                     regexMatchedCount++;
+                    if (regexMatchedSample.size() < 12) {
+                        regexMatchedSample.add(word.toUpperCase());
+                    }
                     List<Character> newProbeLetters = collectNewProbeLetters(word, family.requiredProbeOccurrences);
                     if (newProbeLetters.size() <= 1) {
                         excludedByNewProbeRule++;
@@ -256,18 +258,21 @@ public class WordleSolver {
                 }
             }
             filterPath.add(String.format(
-                    "coverage>=%d | regex=%s | regexMatched=%d | accepted=%d | " +
+                    "coverage>=%d | rankedPool=%d | configuredLimit=%d | regex=%s | regexMatched=%d | accepted=%d | " +
                             "excluded{family=%d, guessed=%d, newProbe<=1=%d} | " +
                             "rules=[exclude family candidates; exclude guessed words; " +
                             "newProbeLetters use required occurrences(baseFixedCount+1); exclude newProbeLetters<=1] | " +
-                            "sample{accepted=%s, family=%s, guessed=%s, newProbe<=1=%s}",
+                            "sample{regexMatched=%s, accepted=%s, family=%s, guessed=%s, newProbe<=1=%s}",
                     targetCoverage,
+                    rankedPoolSize,
+                    entropyMaxGuesses,
                     coverageRegex,
                     regexMatchedCount,
                     acceptedCount,
                     excludedByFamily,
                     excludedByGuessed,
                     excludedByNewProbeRule,
+                    regexMatchedSample.isEmpty() ? "[]" : regexMatchedSample,
                     matchedWords.isEmpty() ? "[]" : matchedWords,
                     excludedFamilySample.isEmpty() ? "[]" : excludedFamilySample,
                     excludedGuessedSample.isEmpty() ? "[]" : excludedGuessedSample,

@@ -13,6 +13,7 @@ repositories {
 
 dependencies {
     implementation 'me.tongfei:progressbar:0.10.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     implementation "org.openjfx:javafx-controls:21.0.4"
@@ -26,6 +27,12 @@ javafx {
 
 application {
     mainClass = 'top.spco.wordlesolver.WordleSimViewerApp'
+}
+
+// Run web server: ./gradlew runWeb
+tasks.register('runWeb', JavaExec) {
+    mainClass = 'top.spco.wordlesolver.WordleWebServer'
+    classpath = sourceSets.main.runtimeClasspath
 }
 
 test {

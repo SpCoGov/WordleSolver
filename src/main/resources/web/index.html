@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wordle Simulation Viewer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <header>
+            <h1>Wordle Simulation Viewer</h1>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="simulation">Simulation</button>
+            <button class="tab-btn" data-tab="list">List Simulation</button>
+            <button class="tab-btn" data-tab="single">Single Word</button>
+            <button class="tab-btn" data-tab="manual">手动猜词</button>
+        </nav>
+
+        <main>
+            <!-- Simulation Tab -->
+            <section id="simulation" class="tab-content active">
+                <div class="split">
+                    <div class="left">
+                        <div class="controls">
+                            <div class="row">
+                                <label>Test Times</label>
+                                <input type="number" id="simTestTimes" value="10000">
+                                <label>TopK</label>
+                                <input type="number" id="simTopK" value="20">
+                            </div>
+                            <div class="row">
+                                <label>Max Attempts</label>
+                                <input type="number" id="simMaxAttempts" value="6">
+                                <label>Word Length</label>
+                                <input type="number" id="simWordLength" value="5">
+                            </div>
+                            <div class="row">
+                                <label>Threads</label>
+                                <input type="number" id="simThreads" value="8">
+                                <label>Answers File</label>
+                                <input type="text" id="simAnswersPath" value="src/main/resources/answers" class="flex">
+                            </div>
+                            <div class="row">
+                                <label>CharWeight</label>
+                                <input type="number" id="simCharWeight" value="1">
+                                <label>PosBonus</label>
+                                <input type="number" id="simPosBonus" value="100">
+                            </div>
+                            <div class="row">
+                                <label>RepeatBase</label>
+                                <input type="number" id="simRepeatBase" value="25">
+                                <label><input type="checkbox" id="simHardMode"> Hard Mode</label>
+                            </div>
+                        </div>
+                        <div class="run-bar">
+                            <button id="simRun">Run</button>
+                            <button id="simStop" disabled>Stop</button>
+                            <div class="progress-wrap">
+                                <progress id="simProgress" value="0" max="100">0%</progress>
+                            </div>
+                            <span id="simStats" class="stats">Ready.</span>
+                        </div>
+                        <h3>Failed Games</h3>
+                        <div class="table-wrap">
+                            <table id="simFailures">
+                                <thead>
+                                    <tr><th>#</th><th>Answer</th><th>Attempts</th><th>Last Guess</th><th>Tag</th></tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="right">
+                        <h3>Report</h3>
+                        <textarea id="simReport" readonly></textarea>
+                        <div class="bar">
+                            <label>Failure Details</label>
+                            <button id="simCopyDetails">Copy Details</button>
+                        </div>
+                        <div id="simDetails" class="details"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- List Simulation Tab -->
+            <section id="list" class="tab-content">
+                <div class="split">
+                    <div class="left">
+                        <div class="controls">
+                            <div class="row">
+                                <label>Mode</label>
+                                <span>Simulate Every Answer</span>
+                                <label>TopK</label>
+                                <input type="number" id="listTopK" value="20">
+                            </div>
+                            <div class="row">
+                                <label>Max Attempts</label>
+                                <input type="number" id="listMaxAttempts" value="6">
+                                <label>Word Length</label>
+                                <input type="number" id="listWordLength" value="5">
+                            </div>
+                            <div class="row">
+                                <label>Threads</label>
+                                <input type="number" id="listThreads" value="8">
+                                <label>Answers File</label>
+                                <input type="text" id="listAnswersPath" value="src/main/resources/answers" class="flex">
+                            </div>
+                            <div class="row">
+                                <label>CharWeight</label>
+                                <input type="number" id="listCharWeight" value="1">
+                                <label>PosBonus</label>
+                                <input type="number" id="listPosBonus" value="100">
+                            </div>
+                            <div class="row">
+                                <label>RepeatBase</label>
+                                <input type="number" id="listRepeatBase" value="25">
+                                <label><input type="checkbox" id="listHardMode"> Hard Mode</label>
+                            </div>
+                        </div>
+                        <div class="run-bar">
+                            <button id="listRun">Run</button>
+                            <button id="listStop" disabled>Stop</button>
+                            <div class="progress-wrap">
+                                <progress id="listProgress" value="0" max="100">0%</progress>
+                            </div>
+                            <span id="listStats" class="stats">Ready.</span>
+                        </div>
+                        <h3>All Games</h3>
+                        <div class="table-wrap">
+                            <table id="listGames">
+                                <thead>
+                                    <tr><th>#</th><th>Answer</th><th>Outcome</th><th>Attempts</th><th>Last Guess</th><th>Tag</th></tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="right">
+                        <h3>Report</h3>
+                        <textarea id="listReport" readonly></textarea>
+                        <div class="bar">
+                            <label>Game Details</label>
+                            <button id="listCopyDetails">Copy Details</button>
+                        </div>
+                        <div id="listDetails" class="details"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Single Word Tab -->
+            <section id="single" class="tab-content">
+                <div class="split">
+                    <div class="left">
+                        <div class="controls">
+                            <div class="row">
+                                <label>Mode</label>
+                                <span>Single Selected Word</span>
+                                <label>TopK</label>
+                                <input type="number" id="singleTopK" value="20">
+                            </div>
+                            <div class="row">
+                                <label>Max Attempts</label>
+                                <input type="number" id="singleMaxAttempts" value="6">
+                                <label>Word Length</label>
+                                <input type="number" id="singleWordLength" value="5">
+                            </div>
+                            <div class="row">
+                                <label>Answers File</label>
+                                <input type="text" id="singleAnswersPath" value="src/main/resources/answers" class="flex">
+                                <button id="singleLoadWords">Load Words</button>
+                            </div>
+                            <div class="row">
+                                <label>CharWeight</label>
+                                <input type="number" id="singleCharWeight" value="1">
+                                <label>PosBonus</label>
+                                <input type="number" id="singlePosBonus" value="100">
+                            </div>
+                            <div class="row">
+                                <label>RepeatBase</label>
+                                <input type="number" id="singleRepeatBase" value="25">
+                                <label><input type="checkbox" id="singleHardMode"> Hard Mode</label>
+                            </div>
+                            <div class="row">
+                                <label>Selected Word</label>
+                                <input type="text" id="singleSelectedWord" placeholder="输入单词" maxlength="5">
+                            </div>
+                        </div>
+                        <div class="run-bar">
+                            <button id="singleRun">Run</button>
+                            <button id="singleStop" disabled>Stop</button>
+                            <div class="progress-wrap">
+                                <progress id="singleProgress" value="0" max="100">0%</progress>
+                            </div>
+                            <span id="singleStats" class="stats">Ready.</span>
+                        </div>
+                        <h3>Word List <span class="hint">(Double click to run)</span></h3>
+                        <div id="singleWordList" class="word-list"></div>
+                    </div>
+                    <div class="right">
+                        <h3>Report</h3>
+                        <textarea id="singleReport" readonly></textarea>
+                        <div class="bar">
+                            <label>Game Details</label>
+                            <button id="singleCopyDetails">Copy Details</button>
+                        </div>
+                        <div id="singleDetails" class="details"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Manual Guess Tab -->
+            <section id="manual" class="tab-content">
+                <div class="split">
+                    <div class="left">
+                        <h3>候选词</h3>
+                        <p id="manualCandidatesCount">候选: 0</p>
+                        <div class="table-wrap">
+                            <table id="manualCandidates">
+                                <thead>
+                                    <tr><th>单词</th><th>分数</th></tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <h3>探测词</h3>
+                        <p id="manualProbesCount">探测词: 0</p>
+                        <div class="table-wrap">
+                            <table id="manualProbes">
+                                <thead>
+                                    <tr><th>探测词</th><th>新增字母</th><th>来源</th></tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="right">
+                        <div class="manual-top">
+                            <label>答案库</label>
+                            <input type="text" id="manualAnswersPath" value="src/main/resources/answers" class="flex">
+                            <label>TopK</label>
+                            <input type="number" id="manualTopK" value="200">
+                            <label><input type="checkbox" id="manualHardMode"> Hard Mode</label>
+                            <button id="manualRefresh">刷新候选</button>
+                            <button id="manualReset">重置</button>
+                        </div>
+                        <div id="manualAttempts" class="attempts"></div>
+                        <button id="manualConfirm">确认本次结果</button>
+                        <p id="manualStatus" class="status">请输入猜测并选择颜色，然后确认。</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
